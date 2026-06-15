@@ -34,6 +34,15 @@ export async function loadGame(): Promise<StoryGame> {
   return shouldUsePostgres() ? loadGameFromPostgres() : loadGameFromDb();
 }
 
+export async function replaceGame(game: StoryGame) {
+  if (shouldUsePostgres()) {
+    await resetPostgresToSeed(game);
+    return;
+  }
+
+  resetDatabaseToSeed(game);
+}
+
 export async function persistGame(input: {
   title?: string;
   tagline?: string;

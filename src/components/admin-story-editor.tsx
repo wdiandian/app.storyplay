@@ -9,6 +9,13 @@ type AdminPayload = {
   game: StoryGame;
 };
 
+type UploadPayload = {
+  url: string;
+  filename: string;
+  size: number;
+  contentType: string | null;
+};
+
 type DraftNode = {
   title: string;
   description: string;
@@ -180,6 +187,9 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [uploadingPromo, setUploadingPromo] = useState(false);
+  const [uploadingNode, setUploadingNode] = useState(false);
 
   const hasNodes = game.nodes.length > 0;
   const projectReadyForTree = hasNodes && Boolean(game.startNodeCode);
@@ -271,6 +281,137 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
       setError(loadErrorMessage(resetError, "重置空白项目失败"));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function exportProject() {
+    setStatus(null);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/admin/export", {
+        method: "GET",
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "导出项目失败");
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `storyplay-export-${Date.now()}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(url);
+      setStatus("已导出项目 JSON");
+    } catch (exportError) {
+      setError(loadErrorMessage(exportError, "导出项目失败"));
+    }
+  }
+
+  async function importProject(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    setImporting(true);
+    setStatus(null);
+    setError(null);
+
+    try {
+      const rawText = await file.text();
+      const parsed = JSON.parse(rawText) as { game?: StoryGame } | StoryGame;
+      const game = "game" in parsed ? parsed.game : parsed;
+
+      if (!game) {
+        throw new Error("导入文件缺少 game 数据");
+      }
+
+      const payload = await requestAdmin<AdminPayload>("/api/admin/import", {
+        method: "POST",
+        body: JSON.stringify({ game }),
+      });
+
+      syncFromGame(payload.game);
+      setStatus("已导入项目数据");
+    } catch (importError) {
+      setError(loadErrorMessage(importError, "导入项目失败"));
+    } finally {
+      setImporting(false);
+      event.target.value = "";
+    }
+  }
+
+  async function uploadAsset(file: File, folder: "videos" | "promo") {
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("folder", folder);
+
+    const response = await fetch("/api/admin/upload", {
+      method: "POST",
+      body: formData,
+      cache: "no-store",
+    });
+
+    const payload = (await response.json()) as UploadPayload | { error: string };
+
+    if (!response.ok || "error" in payload) {
+      throw new Error("error" in payload ? payload.error : "上传失败");
+    }
+
+    return payload;
+  }
+
+  async function uploadPromoVideo(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    setUploadingPromo(true);
+    setStatus(null);
+    setError(null);
+
+    try {
+      const payload = await uploadAsset(file, "promo");
+      setGameForm((current) => ({ ...current, promoVideoUrl: payload.url }));
+      setStatus("宣传视频已上传，记得保存项目配置");
+    } catch (uploadError) {
+      setError(loadErrorMessage(uploadError, "上传宣传视频失败"));
+    } finally {
+      setUploadingPromo(false);
+      event.target.value = "";
+    }
+  }
+
+  async function uploadNodeVideo(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+
+    if (!file || !draftNode) {
+      return;
+    }
+
+    setUploadingNode(true);
+    setStatus(null);
+    setError(null);
+
+    try {
+      const payload = await uploadAsset(file, "videos");
+      setDraftNode((current) => (current ? { ...current, videoUrl: payload.url } : current));
+      setStatus("节点视频已上传，记得保存当前节点");
+    } catch (uploadError) {
+      setError(loadErrorMessage(uploadError, "上传节点视频失败"));
+    } finally {
+      setUploadingNode(false);
+      event.target.value = "";
     }
   }
 
@@ -486,6 +627,48 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
           <section className="grid gap-5">
             <section className="rounded-[2rem] border border-stone-900/10 bg-white/75 p-5 shadow-[0_24px_80px_rgba(52,38,25,0.08)]">
               <div>
+                <p className="text-xs uppercase tracking-[0.35em] text-stone-500">0. 项目迁移</p>
+                <p className="mt-2 text-sm text-stone-700">
+                  导出当前项目 JSON 做备份，或从 JSON 覆盖恢复整个项目。
+                </p>
+              </div>
+
+              <div className="mt-5 grid gap-4 lg:grid-cols-2">
+                <div className="rounded-3xl border border-stone-900/10 bg-white p-4">
+                  <div className="text-sm font-medium text-stone-900">导出项目</div>
+                  <p className="mt-2 text-sm leading-7 text-stone-600">
+                    下载完整项目结构，包含基础信息、宣传页、节点和分支。
+                  </p>
+                  <button
+                    type="button"
+                    className="mt-4 rounded-full bg-stone-950 px-4 py-3 text-sm text-white transition hover:bg-stone-800"
+                    onClick={() => void exportProject()}
+                  >
+                    导出 JSON
+                  </button>
+                </div>
+
+                <div className="rounded-3xl border border-stone-900/10 bg-white p-4">
+                  <div className="text-sm font-medium text-stone-900">导入项目</div>
+                  <p className="mt-2 text-sm leading-7 text-stone-600">
+                    选择导出的 JSON 文件，直接覆盖当前项目配置。
+                  </p>
+                  <label className="mt-4 inline-flex cursor-pointer rounded-full bg-stone-950 px-4 py-3 text-sm text-white transition hover:bg-stone-800">
+                    {importing ? "导入中..." : "选择 JSON 文件"}
+                    <input
+                      type="file"
+                      accept="application/json,.json"
+                      className="hidden"
+                      onChange={(event) => void importProject(event)}
+                      disabled={importing}
+                    />
+                  </label>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-[2rem] border border-stone-900/10 bg-white/75 p-5 shadow-[0_24px_80px_rgba(52,38,25,0.08)]">
+              <div>
                 <p className="text-xs uppercase tracking-[0.35em] text-stone-500">1. 项目基础信息</p>
                 <p className="mt-2 text-sm text-stone-700">这里配置项目名称、摘要、导语和起始节点。</p>
               </div>
@@ -564,6 +747,19 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
                     }
                     placeholder="https://example.com/promo.mp4"
                   />
+                </Field>
+
+                <Field label="上传宣传视频" hint="上传后会自动回填到宣传视频地址字段。">
+                  <label className="inline-flex cursor-pointer rounded-2xl border border-stone-900/10 bg-white px-4 py-3 text-sm text-stone-900 transition hover:border-stone-500">
+                    {uploadingPromo ? "上传中..." : "选择视频文件"}
+                    <input
+                      type="file"
+                      accept="video/*"
+                      className="hidden"
+                      onChange={(event) => void uploadPromoVideo(event)}
+                      disabled={uploadingPromo}
+                    />
+                  </label>
                 </Field>
 
                 <Field label="宣传封面地址" hint="可选。后续如果宣传视频没加载出来，会优先用这个做封面。">
@@ -823,6 +1019,19 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
                             )
                           }
                         />
+                      </Field>
+
+                      <Field label="上传节点视频" hint="上传后会自动回填到当前节点媒体地址。">
+                        <label className="inline-flex cursor-pointer rounded-2xl border border-stone-900/10 bg-white px-4 py-3 text-sm text-stone-900 transition hover:border-stone-500">
+                          {uploadingNode ? "上传中..." : "选择视频文件"}
+                          <input
+                            type="file"
+                            accept="video/*"
+                            className="hidden"
+                            onChange={(event) => void uploadNodeVideo(event)}
+                            disabled={uploadingNode}
+                          />
+                        </label>
                       </Field>
 
                       {draftNode.nodeType === "ending" ? (

@@ -11,6 +11,7 @@ import {
   insertNode,
   loadGame,
   persistGame,
+  replaceGame,
   resetStorageToSeed,
   updateNode,
 } from "@/lib/storage";
@@ -272,5 +273,133 @@ export async function addChoice(nodeCode: string, input: ChoiceInput) {
 
 export async function resetGameToBlankProject() {
   await resetStorageToSeed(blankStorySeed);
+  return getGame();
+}
+
+function sanitizeImportedChoice(choice: StoryChoice): StoryChoice {
+  return {
+    code: choice.code.trim(),
+    label: choice.label.trim(),
+    hint: choice.hint.trim(),
+    targetNodeCode: choice.targetNodeCode.trim(),
+  };
+}
+
+function sanitizeImportedGame(input: StoryGame): StoryGame {
+  const nodes = input.nodes.map((node) => {
+    const normalizedChoices = (node.choices ?? []).map(sanitizeImportedChoice);
+    const nodeType: StoryNode["nodeType"] = node.nodeType === "ending" ? "ending" : "video";
+    const isEnding = nodeType === "ending";
+
+    return {
+      code: node.code.trim(),
+      title: node.title.trim(),
+      description: node.description.trim(),
+      transcript: node.transcript.trim(),
+      videoUrl: node.videoUrl.trim(),
+      nodeType,
+      autoNextNodeCode:
+        !isEnding && node.autoNextNodeCode?.trim() ? node.autoNextNodeCode.trim() : undefined,
+      isEnding,
+      endingTone: isEnding ? node.endingTone ?? "truth" : undefined,
+      choices: normalizedChoices,
+    };
+  });
+
+  return {
+    id: input.id.trim(),
+    slug: input.slug.trim(),
+    title: input.title.trim(),
+    tagline: input.tagline.trim(),
+    intro: input.intro.trim(),
+    promoVideoUrl: input.promoVideoUrl.trim(),
+    promoPosterUrl: input.promoPosterUrl.trim(),
+    promoTitle: input.promoTitle.trim(),
+    promoText: input.promoText.trim(),
+    startNodeCode: input.startNodeCode.trim(),
+    nodes,
+  };
+}
+
+function validateImportedGame(game: StoryGame) {
+  if (!game.id) {
+    throw new Error("Game id is required");
+  }
+
+  if (!game.slug) {
+    throw new Error("Game slug is required");
+  }
+
+  if (!game.title) {
+    throw new Error("Game title is required");
+  }
+
+  if (!game.startNodeCode) {
+    throw new Error("Start node code is required");
+  }
+
+  if (!game.nodes.length) {
+    throw new Error("Imported project must include at least one node");
+  }
+
+  const nodeCodes = new Set<string>();
+
+  for (const node of game.nodes) {
+    if (!node.code) {
+      throw new Error("Each node must have a code");
+    }
+
+    if (nodeCodes.has(node.code)) {
+      throw new Error(`Duplicate node code: ${node.code}`);
+    }
+
+    nodeCodes.add(node.code);
+  }
+
+  if (!nodeCodes.has(game.startNodeCode)) {
+    throw new Error(`Start node not found: ${game.startNodeCode}`);
+  }
+
+  for (const node of game.nodes) {
+    if (!node.title) {
+      throw new Error(`Node title is required: ${node.code}`);
+    }
+
+    if (!node.videoUrl) {
+      throw new Error(`Node video URL is required: ${node.code}`);
+    }
+
+    if (node.autoNextNodeCode && !nodeCodes.has(node.autoNextNodeCode)) {
+      throw new Error(`Auto next node not found: ${node.code} -> ${node.autoNextNodeCode}`);
+    }
+
+    const seenChoiceCodes = new Set<string>();
+
+    for (const choice of node.choices ?? []) {
+      if (!choice.code) {
+        throw new Error(`Choice code is required on node: ${node.code}`);
+      }
+
+      if (seenChoiceCodes.has(choice.code)) {
+        throw new Error(`Duplicate choice code on node ${node.code}: ${choice.code}`);
+      }
+
+      if (!nodeCodes.has(choice.targetNodeCode)) {
+        throw new Error(`Choice target not found: ${node.code} -> ${choice.targetNodeCode}`);
+      }
+
+      seenChoiceCodes.add(choice.code);
+    }
+  }
+}
+
+export async function exportGameData() {
+  return getGame();
+}
+
+export async function importGameData(input: StoryGame) {
+  const game = sanitizeImportedGame(input);
+  validateImportedGame(game);
+  await replaceGame(game);
   return getGame();
 }
