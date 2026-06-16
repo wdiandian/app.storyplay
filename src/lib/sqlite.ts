@@ -8,6 +8,8 @@ import type {
   StoryChoice,
   StoryGame,
   StoryNode,
+  TimelineEvent,
+  VariableDefinition,
 } from "@/lib/story-engine";
 
 type SqliteGlobal = typeof globalThis & {
@@ -25,6 +27,7 @@ type DbGameRow = {
   promo_title: string;
   promo_text: string;
   start_node_code: string;
+  variables_json: string;
 };
 
 type DbNodeRow = {
@@ -37,6 +40,7 @@ type DbNodeRow = {
   auto_next_node_code: string | null;
   is_ending: number;
   ending_tone: EndingTone | null;
+  timeline_events_json: string;
 };
 
 type DbChoiceRow = {
@@ -54,6 +58,8 @@ type DbPlaythroughRow = {
   status: "in_progress" | "completed";
   started_at: string;
   finished_at: string | null;
+  variables_json: string;
+  triggered_event_ids_json: string;
 };
 
 type DbChoiceLogRow = {
@@ -97,7 +103,8 @@ function initializeDb(db: DatabaseSync) {
       promo_poster_url TEXT NOT NULL DEFAULT '',
       promo_title TEXT NOT NULL DEFAULT '',
       promo_text TEXT NOT NULL DEFAULT '',
-      start_node_code TEXT NOT NULL
+      start_node_code TEXT NOT NULL,
+      variables_json TEXT NOT NULL DEFAULT '[]'
     );
 
     CREATE TABLE IF NOT EXISTS story_nodes (
@@ -109,7 +116,8 @@ function initializeDb(db: DatabaseSync) {
       node_type TEXT NOT NULL,
       auto_next_node_code TEXT,
       is_ending INTEGER NOT NULL DEFAULT 0,
-      ending_tone TEXT
+      ending_tone TEXT,
+      timeline_events_json TEXT NOT NULL DEFAULT '[]'
     );
 
     CREATE TABLE IF NOT EXISTS story_choices (
@@ -128,7 +136,9 @@ function initializeDb(db: DatabaseSync) {
       current_node_code TEXT NOT NULL,
       status TEXT NOT NULL,
       started_at TEXT NOT NULL,
-      finished_at TEXT
+      finished_at TEXT,
+      variables_json TEXT NOT NULL DEFAULT '{}',
+      triggered_event_ids_json TEXT NOT NULL DEFAULT '[]'
     );
 
     CREATE TABLE IF NOT EXISTS choice_logs (
@@ -166,6 +176,28 @@ function initializeDb(db: DatabaseSync) {
     db.exec("ALTER TABLE game ADD COLUMN promo_text TEXT NOT NULL DEFAULT ''");
   }
 
+  if (!columnNames.has("variables_json")) {
+    db.exec("ALTER TABLE game ADD COLUMN variables_json TEXT NOT NULL DEFAULT '[]'");
+  }
+
+  const nodeColumns = db.prepare("PRAGMA table_info(story_nodes)").all() as Array<{ name: string }>;
+  const nodeColumnNames = new Set(nodeColumns.map((column) => column.name));
+
+  if (!nodeColumnNames.has("timeline_events_json")) {
+    db.exec("ALTER TABLE story_nodes ADD COLUMN timeline_events_json TEXT NOT NULL DEFAULT '[]'");
+  }
+
+  const playthroughColumns = db.prepare("PRAGMA table_info(playthroughs)").all() as Array<{ name: string }>;
+  const playthroughColumnNames = new Set(playthroughColumns.map((column) => column.name));
+
+  if (!playthroughColumnNames.has("variables_json")) {
+    db.exec("ALTER TABLE playthroughs ADD COLUMN variables_json TEXT NOT NULL DEFAULT '{}'");
+  }
+
+  if (!playthroughColumnNames.has("triggered_event_ids_json")) {
+    db.exec("ALTER TABLE playthroughs ADD COLUMN triggered_event_ids_json TEXT NOT NULL DEFAULT '[]'");
+  }
+
   if (!hasGame.count) {
     seedDatabase(db);
   }
@@ -176,16 +208,17 @@ function seedDatabase(db: DatabaseSync) {
     INSERT INTO game (
       id, slug, title, tagline, intro,
       promo_video_url, promo_poster_url, promo_title, promo_text,
+      variables_json,
       start_node_code
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertNode = db.prepare(`
     INSERT INTO story_nodes (
       code, title, description, transcript, video_url, node_type,
-      auto_next_node_code, is_ending, ending_tone
+      auto_next_node_code, is_ending, ending_tone, timeline_events_json
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertChoice = db.prepare(`
     INSERT INTO story_choices (node_code, code, label, hint, target_node_code)
@@ -203,8 +236,9 @@ function seedDatabase(db: DatabaseSync) {
       blankStorySeed.intro,
       blankStorySeed.promoVideoUrl,
       blankStorySeed.promoPosterUrl,
-      blankStorySeed.promoTitle,
+      "",
       blankStorySeed.promoText,
+      JSON.stringify(blankStorySeed.variables ?? []),
       blankStorySeed.startNodeCode,
     );
 
@@ -219,6 +253,7 @@ function seedDatabase(db: DatabaseSync) {
         node.autoNextNodeCode ?? null,
         node.isEnding ? 1 : 0,
         node.endingTone ?? null,
+        JSON.stringify(node.timelineEvents ?? []),
       );
 
       for (const choice of node.choices ?? []) {
@@ -260,6 +295,7 @@ function mapNodeRow(row: DbNodeRow, choices: StoryChoice[]): StoryNode {
     isEnding: Boolean(row.is_ending),
     endingTone: row.ending_tone ?? undefined,
     choices,
+    timelineEvents: JSON.parse(row.timeline_events_json || "[]") as TimelineEvent[],
   };
 }
 
@@ -285,6 +321,7 @@ export function loadGameFromDb(): StoryGame {
   const gameRow = db.prepare(`
     SELECT id, slug, title, tagline, intro,
            promo_video_url, promo_poster_url, promo_title, promo_text,
+           variables_json,
            start_node_code
     FROM game
     LIMIT 1
@@ -297,7 +334,7 @@ export function loadGameFromDb(): StoryGame {
   const choiceMap = getChoicesByNodeCode(db);
   const nodeRows = db.prepare(`
     SELECT code, title, description, transcript, video_url, node_type,
-           auto_next_node_code, is_ending, ending_tone
+           auto_next_node_code, is_ending, ending_tone, timeline_events_json
     FROM story_nodes
     ORDER BY code
   `).all() as DbNodeRow[];
@@ -310,9 +347,9 @@ export function loadGameFromDb(): StoryGame {
     intro: gameRow.intro,
     promoVideoUrl: gameRow.promo_video_url,
     promoPosterUrl: gameRow.promo_poster_url,
-    promoTitle: gameRow.promo_title,
     promoText: gameRow.promo_text,
     startNodeCode: gameRow.start_node_code,
+    variables: JSON.parse(gameRow.variables_json || "[]") as VariableDefinition[],
     nodes: nodeRows.map((row) => mapNodeRow(row, choiceMap.get(row.code) ?? [])),
   };
 }
@@ -323,9 +360,9 @@ export function persistGameMeta(input: {
   intro?: string;
   promoVideoUrl?: string;
   promoPosterUrl?: string;
-  promoTitle?: string;
   promoText?: string;
   startNodeCode?: string;
+  variables?: VariableDefinition[];
 }) {
   const db = getDb();
   const current = loadGameFromDb();
@@ -334,6 +371,7 @@ export function persistGameMeta(input: {
     UPDATE game
     SET title = ?, tagline = ?, intro = ?,
         promo_video_url = ?, promo_poster_url = ?, promo_title = ?, promo_text = ?,
+        variables_json = ?,
         start_node_code = ?
     WHERE id = ?
   `).run(
@@ -342,8 +380,9 @@ export function persistGameMeta(input: {
     input.intro ?? current.intro,
     input.promoVideoUrl ?? current.promoVideoUrl,
     input.promoPosterUrl ?? current.promoPosterUrl,
-    input.promoTitle ?? current.promoTitle,
+    "",
     input.promoText ?? current.promoText,
+    JSON.stringify(input.variables ?? current.variables ?? []),
     input.startNodeCode ?? current.startNodeCode,
     current.id,
   );
@@ -355,8 +394,8 @@ export function insertNodeRecord(node: StoryNode) {
   db.prepare(`
     INSERT INTO story_nodes (
       code, title, description, transcript, video_url, node_type,
-      auto_next_node_code, is_ending, ending_tone
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      auto_next_node_code, is_ending, ending_tone, timeline_events_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     node.code,
     node.title,
@@ -367,6 +406,7 @@ export function insertNodeRecord(node: StoryNode) {
     node.autoNextNodeCode ?? null,
     node.isEnding ? 1 : 0,
     node.endingTone ?? null,
+    JSON.stringify(node.timelineEvents ?? []),
   );
 }
 
@@ -379,7 +419,7 @@ export function updateNodeRecord(node: StoryNode) {
     db.prepare(`
       UPDATE story_nodes
       SET title = ?, description = ?, transcript = ?, video_url = ?,
-          node_type = ?, auto_next_node_code = ?, is_ending = ?, ending_tone = ?
+          node_type = ?, auto_next_node_code = ?, is_ending = ?, ending_tone = ?, timeline_events_json = ?
       WHERE code = ?
     `).run(
       node.title,
@@ -390,6 +430,7 @@ export function updateNodeRecord(node: StoryNode) {
       node.autoNextNodeCode ?? null,
       node.isEnding ? 1 : 0,
       node.endingTone ?? null,
+      JSON.stringify(node.timelineEvents ?? []),
       node.code,
     );
 
@@ -433,13 +474,15 @@ export function createPlaythroughRecord(input: {
   status: "in_progress" | "completed";
   startedAt: string;
   finishedAt?: string;
+  variables?: PlaythroughState["variables"];
+  triggeredEventIds?: string[];
 }) {
   const db = getDb();
 
   db.prepare(`
     INSERT INTO playthroughs (
-      id, game_slug, current_node_code, status, started_at, finished_at
-    ) VALUES (?, ?, ?, ?, ?, ?)
+      id, game_slug, current_node_code, status, started_at, finished_at, variables_json, triggered_event_ids_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.id,
     input.gameSlug,
@@ -447,6 +490,8 @@ export function createPlaythroughRecord(input: {
     input.status,
     input.startedAt,
     input.finishedAt ?? null,
+    JSON.stringify(input.variables ?? {}),
+    JSON.stringify(input.triggeredEventIds ?? []),
   );
 }
 
@@ -455,13 +500,15 @@ export function updatePlaythroughRecord(session: PlaythroughState) {
 
   db.prepare(`
     UPDATE playthroughs
-    SET current_node_code = ?, status = ?, started_at = ?, finished_at = ?
+    SET current_node_code = ?, status = ?, started_at = ?, finished_at = ?, variables_json = ?, triggered_event_ids_json = ?
     WHERE id = ?
   `).run(
     session.currentNodeCode,
     session.status,
     session.startedAt,
     session.finishedAt ?? null,
+    JSON.stringify(session.variables ?? {}),
+    JSON.stringify(session.triggeredEventIds ?? []),
     session.id,
   );
 }
@@ -503,7 +550,7 @@ export function replaceChoiceLogs(
 export function loadPlaythrough(playthroughId: string): PlaythroughState | null {
   const db = getDb();
   const sessionRow = db.prepare(`
-    SELECT id, game_slug, current_node_code, status, started_at, finished_at
+    SELECT id, game_slug, current_node_code, status, started_at, finished_at, variables_json, triggered_event_ids_json
     FROM playthroughs
     WHERE id = ?
   `).get(playthroughId) as DbPlaythroughRow | undefined;
@@ -526,6 +573,8 @@ export function loadPlaythrough(playthroughId: string): PlaythroughState | null 
     status: sessionRow.status,
     startedAt: sessionRow.started_at,
     finishedAt: sessionRow.finished_at ?? undefined,
+    variables: JSON.parse(sessionRow.variables_json || "{}") as PlaythroughState["variables"],
+    triggeredEventIds: JSON.parse(sessionRow.triggered_event_ids_json || "[]") as string[],
     history: historyRows.map((row) => ({
       nodeCode: row.node_code,
       choiceCode: row.choice_code,
@@ -546,16 +595,17 @@ export function resetDatabaseToSeed(game: StoryGame) {
     INSERT INTO game (
       id, slug, title, tagline, intro,
       promo_video_url, promo_poster_url, promo_title, promo_text,
+      variables_json,
       start_node_code
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertNode = db.prepare(`
     INSERT INTO story_nodes (
       code, title, description, transcript, video_url, node_type,
-      auto_next_node_code, is_ending, ending_tone
+      auto_next_node_code, is_ending, ending_tone, timeline_events_json
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertChoice = db.prepare(`
     INSERT INTO story_choices (node_code, code, label, hint, target_node_code)
@@ -579,8 +629,9 @@ export function resetDatabaseToSeed(game: StoryGame) {
       game.intro,
       game.promoVideoUrl,
       game.promoPosterUrl,
-      game.promoTitle,
+      "",
       game.promoText,
+      JSON.stringify(game.variables ?? []),
       game.startNodeCode,
     );
 
@@ -595,6 +646,7 @@ export function resetDatabaseToSeed(game: StoryGame) {
         node.autoNextNodeCode ?? null,
         node.isEnding ? 1 : 0,
         node.endingTone ?? null,
+        JSON.stringify(node.timelineEvents ?? []),
       );
 
       for (const choice of node.choices ?? []) {

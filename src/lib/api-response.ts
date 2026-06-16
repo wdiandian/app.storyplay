@@ -14,7 +14,6 @@ export function serializePlaythrough(
       intro: game.intro,
       promoVideoUrl: game.promoVideoUrl,
       promoPosterUrl: game.promoPosterUrl,
-      promoTitle: game.promoTitle,
       promoText: game.promoText,
     },
     playthrough: {
@@ -24,6 +23,8 @@ export function serializePlaythrough(
       history: session.history,
       startedAt: session.startedAt,
       finishedAt: session.finishedAt ?? null,
+      variables: session.variables,
+      triggeredEventIds: session.triggeredEventIds,
     },
     node: {
       code: node.code,
@@ -32,16 +33,26 @@ export function serializePlaythrough(
       transcript: node.transcript,
       nodeType: node.nodeType,
       videoUrl: node.videoUrl,
-      posterUrl: node.posterUrl ?? null,
       autoNextNodeCode: node.autoNextNodeCode ?? null,
       isEnding: Boolean(node.isEnding),
       endingTone: node.endingTone ?? null,
+      timelineEvents:
+        node.timelineEvents?.map((event) => ({
+          id: event.id,
+          atMs: event.atMs,
+          type: event.type,
+          payload: event.payload,
+          conditions: event.conditions ?? [],
+          actions: event.actions ?? [],
+        })) ?? [],
       choices:
         node.choices?.map((choice) => ({
           code: choice.code,
           label: choice.label,
           hint: choice.hint,
           targetNodeCode: choice.targetNodeCode,
+          conditions: choice.conditions ?? [],
+          actions: choice.actions ?? [],
         })) ?? [],
     },
   };

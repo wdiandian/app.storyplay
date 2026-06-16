@@ -13,6 +13,7 @@ type GraphEdge = {
   fromCode: string;
   toCode: string;
   kind: "auto" | "choice";
+  missingTarget: boolean;
 };
 
 type PositionedNode = {
@@ -21,34 +22,35 @@ type PositionedNode = {
   y: number;
   incoming: number;
   outgoing: number;
+  missingTargets: number;
   status: "start" | "ending" | "isolated" | "broken" | "connected";
 };
 
-const NODE_WIDTH = 224;
-const NODE_HEIGHT = 112;
-const COLUMN_GAP = 144;
-const ROW_GAP = 44;
-const PADDING_X = 32;
-const PADDING_Y = 24;
+const NODE_WIDTH = 232;
+const NODE_HEIGHT = 128;
+const COLUMN_GAP = 140;
+const ROW_GAP = 48;
+const PADDING_X = 36;
+const PADDING_Y = 28;
 
 function getNodeDisplayStatus(status: PositionedNode["status"]) {
   if (status === "start") {
-    return "开始片段";
+    return "起始节点";
   }
 
   if (status === "ending") {
-    return "结局片段";
+    return "结局节点";
   }
 
   if (status === "isolated") {
-    return "孤立片段";
+    return "孤立节点";
   }
 
   if (status === "broken") {
-    return "缺少出口";
+    return "待补出口";
   }
 
-  return "已连接";
+  return "已连通";
 }
 
 function getNodeColors(status: PositionedNode["status"], isSelected: boolean) {
@@ -101,23 +103,30 @@ function buildGraph(game: StoryGame) {
   }
 
   for (const node of game.nodes) {
-    if (node.autoNextNodeCode && nodeByCode.has(node.autoNextNodeCode)) {
+    if (node.autoNextNodeCode) {
+      const exists = nodeByCode.has(node.autoNextNodeCode);
       edges.push({
         fromCode: node.code,
         toCode: node.autoNextNodeCode,
         kind: "auto",
+        missingTarget: !exists,
       });
-      incoming.set(node.autoNextNodeCode, (incoming.get(node.autoNextNodeCode) ?? 0) + 1);
+
+      if (exists) {
+        incoming.set(node.autoNextNodeCode, (incoming.get(node.autoNextNodeCode) ?? 0) + 1);
+      }
     }
 
     for (const choice of node.choices ?? []) {
+      const exists = nodeByCode.has(choice.targetNodeCode);
       edges.push({
         fromCode: node.code,
         toCode: choice.targetNodeCode,
         kind: "choice",
+        missingTarget: !exists,
       });
 
-      if (nodeByCode.has(choice.targetNodeCode)) {
+      if (exists) {
         incoming.set(choice.targetNodeCode, (incoming.get(choice.targetNodeCode) ?? 0) + 1);
       }
     }
@@ -129,17 +138,21 @@ function buildGraph(game: StoryGame) {
     adjacency.set(
       node.code,
       [
-        ...(node.autoNextNodeCode ? [node.autoNextNodeCode] : []),
-        ...(node.choices?.map((choice) => choice.targetNodeCode) ?? []),
+        ...(node.autoNextNodeCode && nodeByCode.has(node.autoNextNodeCode)
+          ? [node.autoNextNodeCode]
+          : []),
+        ...(node.choices
+          ?.map((choice) => choice.targetNodeCode)
+          .filter((targetCode) => nodeByCode.has(targetCode)) ?? []),
       ].filter((targetCode, index, list) => list.indexOf(targetCode) === index),
     );
   }
 
   const visited = new Set<string>();
   const levels = new Map<number, string[]>();
-  const queue: Array<{ code: string; depth: number }> = [
-    { code: game.startNodeCode, depth: 0 },
-  ];
+  const queue: Array<{ code: string; depth: number }> = game.startNodeCode
+    ? [{ code: game.startNodeCode, depth: 0 }]
+    : [];
   let maxDepth = 0;
 
   while (queue.length) {
@@ -188,6 +201,7 @@ function buildGraph(game: StoryGame) {
       }
 
       const outgoing = edges.filter((edge) => edge.fromCode === code).length;
+      const missingTargets = edges.filter((edge) => edge.fromCode === code && edge.missingTarget).length;
       const isStart = code === game.startNodeCode;
       const isEnding = Boolean(node.isEnding);
       const nodeIncoming = incoming.get(code) ?? 0;
@@ -197,7 +211,7 @@ function buildGraph(game: StoryGame) {
           ? "ending"
           : nodeIncoming === 0
             ? "isolated"
-            : outgoing === 0
+            : outgoing === 0 || missingTargets > 0
               ? "broken"
               : "connected";
 
@@ -207,6 +221,7 @@ function buildGraph(game: StoryGame) {
         y: PADDING_Y + index * (NODE_HEIGHT + ROW_GAP),
         incoming: nodeIncoming,
         outgoing,
+        missingTargets,
         status,
       });
     });
@@ -225,11 +240,7 @@ function buildGraph(game: StoryGame) {
   };
 }
 
-export function BranchGraph({
-  game,
-  selectedNodeCode,
-  onSelectNode,
-}: BranchGraphProps) {
+export function BranchGraph({ game, selectedNodeCode, onSelectNode }: BranchGraphProps) {
   const graph = useMemo(() => buildGraph(game), [game]);
 
   return (
@@ -242,7 +253,7 @@ export function BranchGraph({
           虚线 = 玩家选项
         </span>
         <span className="rounded-full border border-stone-900/10 bg-white px-3 py-1">
-          点击节点可切换到对应编辑区
+          红色边 = 缺失目标或待补出口
         </span>
       </div>
 
@@ -291,12 +302,25 @@ export function BranchGraph({
               const path = `M ${startX} ${startY} C ${startX + curveX} ${startY}, ${endX - curveX} ${endY}, ${endX} ${endY}`;
               const labelX = (startX + endX) / 2;
               const labelY = (startY + endY) / 2 - 10;
+              const stroke = edge.missingTarget
+                ? "#e11d48"
+                : edge.kind === "auto"
+                  ? "#57534e"
+                  : "#a16207";
+              const fill = edge.missingTarget ? "#ffe4e6" : edge.kind === "auto" ? "#ffffff" : "#fef3c7";
+              const border = edge.missingTarget ? "#fb7185" : edge.kind === "auto" ? "#d6d3d1" : "#fcd34d";
+              const text = edge.missingTarget
+                ? "目标缺失"
+                : edge.kind === "auto"
+                  ? "自动跳转"
+                  : "玩家选项";
+              const textColor = edge.missingTarget ? "#be123c" : edge.kind === "auto" ? "#44403c" : "#92400e";
 
               return (
                 <g key={`${edge.fromCode}-${edge.toCode}-${index}`}>
                   <path
                     d={path}
-                    stroke={edge.kind === "auto" ? "#57534e" : "#a16207"}
+                    stroke={stroke}
                     strokeWidth="2.5"
                     strokeDasharray={edge.kind === "choice" ? "8 6" : undefined}
                     markerEnd="url(#branch-arrow)"
@@ -308,17 +332,17 @@ export function BranchGraph({
                     width="96"
                     height="24"
                     rx="12"
-                    fill={edge.kind === "auto" ? "#ffffff" : "#fef3c7"}
-                    stroke={edge.kind === "auto" ? "#d6d3d1" : "#fcd34d"}
+                    fill={fill}
+                    stroke={border}
                   />
                   <text
                     x={labelX}
                     y={labelY + 4}
                     textAnchor="middle"
                     fontSize="10"
-                    fill={edge.kind === "auto" ? "#44403c" : "#92400e"}
+                    fill={textColor}
                   >
-                    {edge.kind === "auto" ? "自动跳转" : "玩家选项"}
+                    {text}
                   </text>
                 </g>
               );
@@ -352,6 +376,7 @@ export function BranchGraph({
                 <div className={`mt-4 flex flex-wrap gap-2 text-[11px] ${colors.sub}`}>
                   <span>入口 {entry.incoming}</span>
                   <span>出口 {entry.outgoing}</span>
+                  {entry.missingTargets > 0 ? <span>缺失目标 {entry.missingTargets}</span> : null}
                 </div>
               </button>
             );

@@ -1,10 +1,14 @@
 import { blankStorySeed } from "@/data/sample-story";
 import {
   getNodeByCode,
+  type ConditionRule,
   type EndingTone,
   type StoryChoice,
   type StoryGame,
   type StoryNode,
+  type TimelineEvent,
+  type VariableAction,
+  type VariableDefinition,
 } from "@/lib/story-engine";
 import {
   insertChoice,
@@ -22,9 +26,9 @@ type GameSettingsInput = {
   intro?: string;
   promoVideoUrl?: string;
   promoPosterUrl?: string;
-  promoTitle?: string;
   promoText?: string;
   startNodeCode?: string;
+  variables?: VariableDefinition[];
 };
 
 type NodeInput = {
@@ -47,6 +51,7 @@ type NodeUpdateInput = {
   autoNextNodeCode?: string | null;
   endingTone?: EndingTone | null;
   choices?: StoryChoice[];
+  timelineEvents?: TimelineEvent[];
 };
 
 type ChoiceInput = {
@@ -70,7 +75,27 @@ function sanitizeChoice(choice: ChoiceInput): StoryChoice {
     label: choice.label.trim(),
     hint: choice.hint.trim(),
     targetNodeCode: choice.targetNodeCode.trim(),
+    conditions: [],
+    actions: [],
   };
+}
+
+function sanitizeConditions(conditions: ConditionRule[] | undefined) {
+  return (conditions ?? []).map((condition, index) => ({
+    id: condition.id?.trim() || `condition_${index + 1}`,
+    variableKey: condition.variableKey.trim(),
+    operator: condition.operator,
+    value: condition.value,
+  }));
+}
+
+function sanitizeActions(actions: VariableAction[] | undefined) {
+  return (actions ?? []).map((action, index) => ({
+    id: action.id?.trim() || `action_${index + 1}`,
+    variableKey: action.variableKey.trim(),
+    type: action.type,
+    value: action.value,
+  }));
 }
 
 function sanitizeNode(input: NodeInput): StoryNode {
@@ -129,12 +154,18 @@ export async function updateGameSettings(input: GameSettingsInput) {
     game.promoPosterUrl = input.promoPosterUrl.trim();
   }
 
-  if (typeof input.promoTitle === "string") {
-    game.promoTitle = input.promoTitle.trim();
-  }
-
   if (typeof input.promoText === "string") {
     game.promoText = input.promoText.trim();
+  }
+
+  if (input.variables) {
+    game.variables = input.variables.map((variable) => ({
+      key: variable.key.trim(),
+      label: variable.label.trim(),
+      type: variable.type,
+      initialValue: variable.initialValue,
+      options: variable.options?.map((option) => option.trim()).filter(Boolean),
+    }));
   }
 
   await persistGame({
@@ -143,9 +174,9 @@ export async function updateGameSettings(input: GameSettingsInput) {
     intro: game.intro,
     promoVideoUrl: game.promoVideoUrl,
     promoPosterUrl: game.promoPosterUrl,
-    promoTitle: game.promoTitle,
     promoText: game.promoText,
     startNodeCode: game.startNodeCode,
+    variables: game.variables,
   });
 
   return game;
@@ -236,13 +267,133 @@ export async function updateNodeDetails(nodeCode: string, input: NodeUpdateInput
       }
 
       assertNodeExists(game, normalized.targetNodeCode);
+      normalized.conditions = sanitizeConditions(choice.conditions);
+      normalized.actions = sanitizeActions(choice.actions);
       seenCodes.add(normalized.code);
       return normalized;
     });
   }
 
+  if (input.timelineEvents) {
+    const seenEventIds = new Set<string>();
+
+    node.timelineEvents = input.timelineEvents.map((event) => {
+      const normalizedId = event.id.trim();
+
+      if (!normalizedId) {
+        throw new Error("Timeline event id is required");
+      }
+
+      if (seenEventIds.has(normalizedId)) {
+        throw new Error(`Duplicate timeline event id: ${normalizedId}`);
+      }
+
+      if (!Number.isFinite(event.atMs) || event.atMs < 0) {
+        throw new Error(`Invalid timeline event time: ${normalizedId}`);
+      }
+
+      seenEventIds.add(normalizedId);
+
+      return {
+        id: normalizedId,
+        atMs: event.atMs,
+        type: event.type,
+        payload: event.payload ?? {},
+        conditions: sanitizeConditions(event.conditions),
+        actions: sanitizeActions(event.actions),
+      };
+    });
+  }
+
   await updateNode(node);
   return node;
+}
+
+function removeNodeReferences(node: StoryNode, nodeCode: string) {
+  const nextChoices = (node.choices ?? []).filter((choice) => choice.targetNodeCode !== nodeCode);
+  const nextTimelineEvents = (node.timelineEvents ?? []).flatMap((event) => {
+    if (event.type === "jump") {
+      const targetNodeCode =
+        typeof event.payload?.targetNodeCode === "string" ? event.payload.targetNodeCode.trim() : "";
+
+      if (targetNodeCode === nodeCode) {
+        return [];
+      }
+    }
+
+    if (event.type === "show_choice") {
+      const payloadChoices = Array.isArray(event.payload?.choices) ? event.payload.choices : null;
+
+      if (!payloadChoices) {
+        return [event];
+      }
+
+      const nextPayloadChoices = payloadChoices.filter((choice) => {
+        if (!choice || typeof choice !== "object") {
+          return true;
+        }
+
+        const targetNodeCode =
+          typeof (choice as { targetNodeCode?: unknown }).targetNodeCode === "string"
+            ? (choice as { targetNodeCode: string }).targetNodeCode.trim()
+            : "";
+
+        return targetNodeCode !== nodeCode;
+      });
+
+      return [
+        {
+          ...event,
+          payload: {
+            ...event.payload,
+            choices: nextPayloadChoices,
+          },
+        },
+      ];
+    }
+
+    return [event];
+  });
+
+  return {
+    ...node,
+    autoNextNodeCode: node.autoNextNodeCode === nodeCode ? undefined : node.autoNextNodeCode,
+    choices: nextChoices,
+    timelineEvents: nextTimelineEvents,
+  };
+}
+
+export async function deleteNodeByCode(nodeCode: string) {
+  const game = await getGame();
+  const normalizedNodeCode = nodeCode.trim();
+
+  if (!normalizedNodeCode) {
+    throw new Error("Node code is required");
+  }
+
+  if (game.nodes.length <= 1) {
+    throw new Error("At least one node must remain in the project");
+  }
+
+  getNodeByCode(game, normalizedNodeCode);
+
+  const remainingNodes = game.nodes
+    .filter((node) => node.code !== normalizedNodeCode)
+    .map((node) => removeNodeReferences(structuredClone(node), normalizedNodeCode));
+
+  const nextStartNodeCode =
+    game.startNodeCode === normalizedNodeCode
+      ? remainingNodes[0]?.code ?? ""
+      : game.startNodeCode;
+
+  const nextGame: StoryGame = {
+    ...game,
+    startNodeCode: nextStartNodeCode,
+    nodes: remainingNodes,
+  };
+
+  await replaceGame(nextGame);
+  return getGame();
 }
 
 export async function addChoice(nodeCode: string, input: ChoiceInput) {
@@ -282,6 +433,8 @@ function sanitizeImportedChoice(choice: StoryChoice): StoryChoice {
     label: choice.label.trim(),
     hint: choice.hint.trim(),
     targetNodeCode: choice.targetNodeCode.trim(),
+    conditions: sanitizeConditions(choice.conditions),
+    actions: sanitizeActions(choice.actions),
   };
 }
 
@@ -303,6 +456,14 @@ function sanitizeImportedGame(input: StoryGame): StoryGame {
       isEnding,
       endingTone: isEnding ? node.endingTone ?? "truth" : undefined,
       choices: normalizedChoices,
+      timelineEvents: (node.timelineEvents ?? []).map((event) => ({
+        id: event.id.trim(),
+        atMs: event.atMs,
+        type: event.type,
+        payload: event.payload ?? {},
+        conditions: sanitizeConditions(event.conditions),
+        actions: sanitizeActions(event.actions),
+      })),
     };
   });
 
@@ -314,9 +475,15 @@ function sanitizeImportedGame(input: StoryGame): StoryGame {
     intro: input.intro.trim(),
     promoVideoUrl: input.promoVideoUrl.trim(),
     promoPosterUrl: input.promoPosterUrl.trim(),
-    promoTitle: input.promoTitle.trim(),
     promoText: input.promoText.trim(),
     startNodeCode: input.startNodeCode.trim(),
+    variables: (input.variables ?? []).map((variable) => ({
+      key: variable.key.trim(),
+      label: variable.label.trim(),
+      type: variable.type,
+      initialValue: variable.initialValue,
+      options: variable.options?.map((option) => option.trim()).filter(Boolean),
+    })),
     nodes,
   };
 }
@@ -340,6 +507,20 @@ function validateImportedGame(game: StoryGame) {
 
   if (!game.nodes.length) {
     throw new Error("Imported project must include at least one node");
+  }
+
+  const seenVariableKeys = new Set<string>();
+
+  for (const variable of game.variables ?? []) {
+    if (!variable.key) {
+      throw new Error("Variable key is required");
+    }
+
+    if (seenVariableKeys.has(variable.key)) {
+      throw new Error(`Duplicate variable key: ${variable.key}`);
+    }
+
+    seenVariableKeys.add(variable.key);
   }
 
   const nodeCodes = new Set<string>();
@@ -373,6 +554,36 @@ function validateImportedGame(game: StoryGame) {
       throw new Error(`Auto next node not found: ${node.code} -> ${node.autoNextNodeCode}`);
     }
 
+    const seenEventIds = new Set<string>();
+
+    for (const event of node.timelineEvents ?? []) {
+      if (!event.id) {
+        throw new Error(`Timeline event id is required on node: ${node.code}`);
+      }
+
+      if (seenEventIds.has(event.id)) {
+        throw new Error(`Duplicate timeline event id on node ${node.code}: ${event.id}`);
+      }
+
+      if (!Number.isFinite(event.atMs) || event.atMs < 0) {
+        throw new Error(`Invalid timeline event time on node ${node.code}: ${event.id}`);
+      }
+
+      for (const condition of event.conditions ?? []) {
+        if (!condition.variableKey) {
+          throw new Error(`Timeline event condition variable is required: ${node.code}/${event.id}`);
+        }
+      }
+
+      for (const action of event.actions ?? []) {
+        if (!action.variableKey) {
+          throw new Error(`Timeline event action variable is required: ${node.code}/${event.id}`);
+        }
+      }
+
+      seenEventIds.add(event.id);
+    }
+
     const seenChoiceCodes = new Set<string>();
 
     for (const choice of node.choices ?? []) {
@@ -386,6 +597,18 @@ function validateImportedGame(game: StoryGame) {
 
       if (!nodeCodes.has(choice.targetNodeCode)) {
         throw new Error(`Choice target not found: ${node.code} -> ${choice.targetNodeCode}`);
+      }
+
+      for (const condition of choice.conditions ?? []) {
+        if (!condition.variableKey) {
+          throw new Error(`Choice condition variable is required: ${node.code}/${choice.code}`);
+        }
+      }
+
+      for (const action of choice.actions ?? []) {
+        if (!action.variableKey) {
+          throw new Error(`Choice action variable is required: ${node.code}/${choice.code}`);
+        }
       }
 
       seenChoiceCodes.add(choice.code);

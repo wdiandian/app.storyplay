@@ -1,18 +1,5 @@
 import type { Metadata } from "next";
-import { Noto_Sans_SC, Noto_Serif_SC } from "next/font/google";
 import "./globals.css";
-
-const bodyFont = Noto_Sans_SC({
-  variable: "--font-body",
-  subsets: ["latin"],
-  weight: ["400", "500", "700"],
-});
-
-const displayFont = Noto_Serif_SC({
-  variable: "--font-display",
-  subsets: ["latin"],
-  weight: ["500", "700"],
-});
 
 export const metadata: Metadata = {
   title: "互动影游项目",
@@ -25,10 +12,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="zh-CN"
-      className={`${bodyFont.variable} ${displayFont.variable} h-full antialiased`}
-    >
+    <html lang="zh-CN" className="h-full antialiased">
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );

@@ -1,4 +1,5 @@
 import { getGame, resetGameToBlankProject, updateGameSettings } from "@/lib/game-store";
+import type { VariableDefinition } from "@/lib/story-engine";
 
 export const dynamic = "force-dynamic";
 
@@ -15,9 +16,9 @@ export async function PATCH(request: Request) {
     intro?: string;
     promoVideoUrl?: string;
     promoPosterUrl?: string;
-    promoTitle?: string;
     promoText?: string;
     startNodeCode?: string;
+    variables?: VariableDefinition[];
   };
 
   try {

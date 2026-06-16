@@ -1,6 +1,10 @@
 import { serializePlaythrough } from "@/lib/api-response";
 import { getGame } from "@/lib/game-store";
-import { advancePlaythrough, restartPlaythrough } from "@/lib/playthrough-store";
+import {
+  advancePlaythrough,
+  restartPlaythrough,
+  restartPlaythroughFromNode,
+} from "@/lib/playthrough-store";
 
 export async function POST(
   request: Request,
@@ -8,13 +12,15 @@ export async function POST(
 ) {
   const { playthroughId } = await context.params;
   const body = (await request.json().catch(() => null)) as
-    | { action?: "restart" }
+    | { action?: "restart"; startNodeCode?: string }
     | null;
 
   try {
     const result =
       body?.action === "restart"
-        ? await restartPlaythrough(playthroughId)
+        ? body.startNodeCode?.trim()
+          ? await restartPlaythroughFromNode(playthroughId, body.startNodeCode)
+          : await restartPlaythrough(playthroughId)
         : await advancePlaythrough(playthroughId);
 
     return Response.json(

@@ -1,9 +1,61 @@
 export type NodeType = "video" | "ending";
 export type EndingTone = "truth" | "survival" | "tragedy";
 
-export type ChoiceEffect = {
-  clue?: string;
-  affinity?: number;
+export type VariableValueType = "number" | "boolean" | "string" | "enum";
+export type VariableRuntimeValue = string | number | boolean;
+
+export type VariableDefinition = {
+  key: string;
+  label: string;
+  type: VariableValueType;
+  initialValue: VariableRuntimeValue;
+  options?: string[];
+};
+
+export type VariableState = Record<string, VariableRuntimeValue>;
+
+export type ConditionOperator =
+  | "eq"
+  | "neq"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "includes"
+  | "not_includes";
+
+export type ConditionRule = {
+  id: string;
+  variableKey: string;
+  operator: ConditionOperator;
+  value: VariableRuntimeValue;
+};
+
+export type VariableActionType = "set" | "increment" | "toggle" | "append_tag";
+
+export type VariableAction = {
+  id: string;
+  variableKey: string;
+  type: VariableActionType;
+  value?: VariableRuntimeValue;
+};
+
+export type TimelineEventType =
+  | "show_text"
+  | "show_choice"
+  | "pause"
+  | "play_audio"
+  | "jump"
+  | "run_actions"
+  | "show_overlay";
+
+export type TimelineEvent = {
+  id: string;
+  atMs: number;
+  type: TimelineEventType;
+  payload: Record<string, unknown>;
+  conditions?: ConditionRule[];
+  actions?: VariableAction[];
 };
 
 export type StoryChoice = {
@@ -11,7 +63,8 @@ export type StoryChoice = {
   label: string;
   targetNodeCode: string;
   hint: string;
-  effect?: ChoiceEffect;
+  conditions?: ConditionRule[];
+  actions?: VariableAction[];
 };
 
 export type StoryNode = {
@@ -20,12 +73,12 @@ export type StoryNode = {
   description: string;
   transcript: string;
   videoUrl: string;
-  posterUrl?: string;
   nodeType: NodeType;
   autoNextNodeCode?: string;
   isEnding?: boolean;
   endingTone?: EndingTone;
   choices?: StoryChoice[];
+  timelineEvents?: TimelineEvent[];
 };
 
 export type StoryGame = {
@@ -36,9 +89,9 @@ export type StoryGame = {
   intro: string;
   promoVideoUrl: string;
   promoPosterUrl: string;
-  promoTitle: string;
   promoText: string;
   startNodeCode: string;
+  variables?: VariableDefinition[];
   nodes: StoryNode[];
 };
 
@@ -60,6 +113,8 @@ export type PlaythroughState = {
   history: ChoiceLog[];
   startedAt: string;
   finishedAt?: string;
+  variables: VariableState;
+  triggeredEventIds: string[];
 };
 
 export function indexNodes(game: StoryGame) {

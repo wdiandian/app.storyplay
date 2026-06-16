@@ -1,4 +1,10 @@
-import type { PlaythroughState, StoryChoice, StoryGame, StoryNode } from "@/lib/story-engine";
+import type {
+  PlaythroughState,
+  StoryChoice,
+  StoryGame,
+  StoryNode,
+  VariableDefinition,
+} from "@/lib/story-engine";
 import {
   createPlaythroughRecordInPostgres,
   getPostgresConnectionLabel,
@@ -49,9 +55,9 @@ export async function persistGame(input: {
   intro?: string;
   promoVideoUrl?: string;
   promoPosterUrl?: string;
-  promoTitle?: string;
   promoText?: string;
   startNodeCode?: string;
+  variables?: VariableDefinition[];
 }) {
   if (shouldUsePostgres()) {
     await persistGameMetaInPostgres(input);
@@ -95,6 +101,8 @@ export async function createPlaythroughRecordForStorage(input: {
   status: "in_progress" | "completed";
   startedAt: string;
   finishedAt?: string;
+  variables?: PlaythroughState["variables"];
+  triggeredEventIds?: string[];
 }) {
   if (shouldUsePostgres()) {
     await createPlaythroughRecordInPostgres(input);

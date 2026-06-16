@@ -6,6 +6,8 @@ import type {
   StoryChoice,
   StoryGame,
   StoryNode,
+  TimelineEvent,
+  VariableDefinition,
 } from "@/lib/story-engine";
 
 type DbGameRow = {
@@ -19,6 +21,7 @@ type DbGameRow = {
   promo_title: string;
   promo_text: string;
   start_node_code: string;
+  variables_json: string;
 };
 
 type DbNodeRow = {
@@ -31,6 +34,7 @@ type DbNodeRow = {
   auto_next_node_code: string | null;
   is_ending: boolean;
   ending_tone: EndingTone | null;
+  timeline_events_json: string;
 };
 
 type DbChoiceRow = {
@@ -48,6 +52,8 @@ type DbPlaythroughRow = {
   status: "in_progress" | "completed";
   started_at: string;
   finished_at: string | null;
+  variables_json: string;
+  triggered_event_ids_json: string;
 };
 
 type DbChoiceLogRow = {
@@ -145,6 +151,7 @@ function mapNodeRow(row: DbNodeRow, choices: StoryChoice[]): StoryNode {
     isEnding: row.is_ending,
     endingTone: row.ending_tone ?? undefined,
     choices,
+    timelineEvents: JSON.parse(row.timeline_events_json || "[]") as TimelineEvent[],
   };
 }
 
@@ -171,9 +178,10 @@ async function seedPostgres(client: PoolClient, game: StoryGame) {
       INSERT INTO game (
         id, slug, title, tagline, intro,
         promo_video_url, promo_poster_url, promo_title, promo_text,
+        variables_json,
         start_node_code
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
     `,
     [
       game.id,
@@ -183,8 +191,9 @@ async function seedPostgres(client: PoolClient, game: StoryGame) {
       game.intro,
       game.promoVideoUrl,
       game.promoPosterUrl,
-      game.promoTitle,
+      "",
       game.promoText,
+      JSON.stringify(game.variables ?? []),
       game.startNodeCode,
     ],
   );
@@ -194,9 +203,9 @@ async function seedPostgres(client: PoolClient, game: StoryGame) {
       `
         INSERT INTO story_nodes (
           code, title, description, transcript, video_url, node_type,
-          auto_next_node_code, is_ending, ending_tone
+          auto_next_node_code, is_ending, ending_tone, timeline_events_json
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       `,
       [
         node.code,
@@ -208,6 +217,7 @@ async function seedPostgres(client: PoolClient, game: StoryGame) {
         node.autoNextNodeCode ?? null,
         Boolean(node.isEnding),
         node.endingTone ?? null,
+        JSON.stringify(node.timelineEvents ?? []),
       ],
     );
 
@@ -245,8 +255,30 @@ export async function initializePostgres() {
           promo_poster_url TEXT NOT NULL DEFAULT '',
           promo_title TEXT NOT NULL DEFAULT '',
           promo_text TEXT NOT NULL DEFAULT '',
-          start_node_code TEXT NOT NULL
+          start_node_code TEXT NOT NULL,
+          variables_json TEXT NOT NULL DEFAULT '[]'
         )
+      `);
+
+      await client.query(`
+        ALTER TABLE game
+        ADD COLUMN IF NOT EXISTS promo_video_url TEXT NOT NULL DEFAULT ''
+      `);
+      await client.query(`
+        ALTER TABLE game
+        ADD COLUMN IF NOT EXISTS promo_poster_url TEXT NOT NULL DEFAULT ''
+      `);
+      await client.query(`
+        ALTER TABLE game
+        ADD COLUMN IF NOT EXISTS promo_title TEXT NOT NULL DEFAULT ''
+      `);
+      await client.query(`
+        ALTER TABLE game
+        ADD COLUMN IF NOT EXISTS promo_text TEXT NOT NULL DEFAULT ''
+      `);
+      await client.query(`
+        ALTER TABLE game
+        ADD COLUMN IF NOT EXISTS variables_json TEXT NOT NULL DEFAULT '[]'
       `);
 
       await client.query(`
@@ -259,8 +291,14 @@ export async function initializePostgres() {
           node_type TEXT NOT NULL,
           auto_next_node_code TEXT,
           is_ending BOOLEAN NOT NULL DEFAULT FALSE,
-          ending_tone TEXT
+          ending_tone TEXT,
+          timeline_events_json TEXT NOT NULL DEFAULT '[]'
         )
+      `);
+
+      await client.query(`
+        ALTER TABLE story_nodes
+        ADD COLUMN IF NOT EXISTS timeline_events_json TEXT NOT NULL DEFAULT '[]'
       `);
 
       await client.query(`
@@ -281,8 +319,19 @@ export async function initializePostgres() {
           current_node_code TEXT NOT NULL,
           status TEXT NOT NULL,
           started_at TEXT NOT NULL,
-          finished_at TEXT
+          finished_at TEXT,
+          variables_json TEXT NOT NULL DEFAULT '{}',
+          triggered_event_ids_json TEXT NOT NULL DEFAULT '[]'
         )
+      `);
+
+      await client.query(`
+        ALTER TABLE playthroughs
+        ADD COLUMN IF NOT EXISTS variables_json TEXT NOT NULL DEFAULT '{}'
+      `);
+      await client.query(`
+        ALTER TABLE playthroughs
+        ADD COLUMN IF NOT EXISTS triggered_event_ids_json TEXT NOT NULL DEFAULT '[]'
       `);
 
       await client.query(`
@@ -315,6 +364,7 @@ export async function loadGameFromPostgres(): Promise<StoryGame> {
     const gameResult = await client.query<DbGameRow>(`
       SELECT id, slug, title, tagline, intro,
              promo_video_url, promo_poster_url, promo_title, promo_text,
+             variables_json,
              start_node_code
       FROM game
       LIMIT 1
@@ -328,7 +378,7 @@ export async function loadGameFromPostgres(): Promise<StoryGame> {
     const choiceMap = await getChoicesByNodeCode(client);
     const nodeResult = await client.query<DbNodeRow>(`
       SELECT code, title, description, transcript, video_url, node_type,
-             auto_next_node_code, is_ending, ending_tone
+             auto_next_node_code, is_ending, ending_tone, timeline_events_json
       FROM story_nodes
       ORDER BY code
     `);
@@ -341,9 +391,9 @@ export async function loadGameFromPostgres(): Promise<StoryGame> {
       intro: gameRow.intro,
       promoVideoUrl: gameRow.promo_video_url,
       promoPosterUrl: gameRow.promo_poster_url,
-      promoTitle: gameRow.promo_title,
       promoText: gameRow.promo_text,
       startNodeCode: gameRow.start_node_code,
+      variables: JSON.parse(gameRow.variables_json || "[]") as VariableDefinition[],
       nodes: nodeResult.rows.map((row) => mapNodeRow(row, choiceMap.get(row.code) ?? [])),
     };
   });
@@ -355,9 +405,9 @@ export async function persistGameMetaInPostgres(input: {
   intro?: string;
   promoVideoUrl?: string;
   promoPosterUrl?: string;
-  promoTitle?: string;
   promoText?: string;
   startNodeCode?: string;
+  variables?: VariableDefinition[];
 }) {
   await initializePostgres();
   const current = await loadGameFromPostgres();
@@ -368,8 +418,8 @@ export async function persistGameMetaInPostgres(input: {
         UPDATE game
         SET title = $1, tagline = $2, intro = $3,
             promo_video_url = $4, promo_poster_url = $5, promo_title = $6, promo_text = $7,
-            start_node_code = $8
-        WHERE id = $9
+            variables_json = $8, start_node_code = $9
+        WHERE id = $10
       `,
       [
         input.title ?? current.title,
@@ -377,8 +427,9 @@ export async function persistGameMetaInPostgres(input: {
         input.intro ?? current.intro,
         input.promoVideoUrl ?? current.promoVideoUrl,
         input.promoPosterUrl ?? current.promoPosterUrl,
-        input.promoTitle ?? current.promoTitle,
+        "",
         input.promoText ?? current.promoText,
+        JSON.stringify(input.variables ?? current.variables ?? []),
         input.startNodeCode ?? current.startNodeCode,
         current.id,
       ],
@@ -394,8 +445,8 @@ export async function insertNodeRecordInPostgres(node: StoryNode) {
       `
         INSERT INTO story_nodes (
           code, title, description, transcript, video_url, node_type,
-          auto_next_node_code, is_ending, ending_tone
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          auto_next_node_code, is_ending, ending_tone, timeline_events_json
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       `,
       [
         node.code,
@@ -407,6 +458,7 @@ export async function insertNodeRecordInPostgres(node: StoryNode) {
         node.autoNextNodeCode ?? null,
         Boolean(node.isEnding),
         node.endingTone ?? null,
+        JSON.stringify(node.timelineEvents ?? []),
       ],
     );
   });
@@ -420,8 +472,9 @@ export async function updateNodeRecordInPostgres(node: StoryNode) {
       `
         UPDATE story_nodes
         SET title = $1, description = $2, transcript = $3, video_url = $4,
-            node_type = $5, auto_next_node_code = $6, is_ending = $7, ending_tone = $8
-        WHERE code = $9
+            node_type = $5, auto_next_node_code = $6, is_ending = $7, ending_tone = $8,
+            timeline_events_json = $9
+        WHERE code = $10
       `,
       [
         node.title,
@@ -432,6 +485,7 @@ export async function updateNodeRecordInPostgres(node: StoryNode) {
         node.autoNextNodeCode ?? null,
         Boolean(node.isEnding),
         node.endingTone ?? null,
+        JSON.stringify(node.timelineEvents ?? []),
         node.code,
       ],
     );
@@ -471,6 +525,8 @@ export async function createPlaythroughRecordInPostgres(input: {
   status: "in_progress" | "completed";
   startedAt: string;
   finishedAt?: string;
+  variables?: PlaythroughState["variables"];
+  triggeredEventIds?: string[];
 }) {
   await initializePostgres();
 
@@ -478,8 +534,8 @@ export async function createPlaythroughRecordInPostgres(input: {
     await client.query(
       `
         INSERT INTO playthroughs (
-          id, game_slug, current_node_code, status, started_at, finished_at
-        ) VALUES ($1, $2, $3, $4, $5, $6)
+          id, game_slug, current_node_code, status, started_at, finished_at, variables_json, triggered_event_ids_json
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       `,
       [
         input.id,
@@ -488,6 +544,8 @@ export async function createPlaythroughRecordInPostgres(input: {
         input.status,
         input.startedAt,
         input.finishedAt ?? null,
+        JSON.stringify(input.variables ?? {}),
+        JSON.stringify(input.triggeredEventIds ?? []),
       ],
     );
   });
@@ -500,14 +558,17 @@ export async function updatePlaythroughRecordInPostgres(session: PlaythroughStat
     await client.query(
       `
         UPDATE playthroughs
-        SET current_node_code = $1, status = $2, started_at = $3, finished_at = $4
-        WHERE id = $5
+        SET current_node_code = $1, status = $2, started_at = $3, finished_at = $4,
+            variables_json = $5, triggered_event_ids_json = $6
+        WHERE id = $7
       `,
       [
         session.currentNodeCode,
         session.status,
         session.startedAt,
         session.finishedAt ?? null,
+        JSON.stringify(session.variables ?? {}),
+        JSON.stringify(session.triggeredEventIds ?? []),
         session.id,
       ],
     );
@@ -549,7 +610,7 @@ export async function loadPlaythroughFromPostgres(playthroughId: string): Promis
   return withClient(async (client) => {
     const sessionResult = await client.query<DbPlaythroughRow>(
       `
-        SELECT id, game_slug, current_node_code, status, started_at, finished_at
+        SELECT id, game_slug, current_node_code, status, started_at, finished_at, variables_json, triggered_event_ids_json
         FROM playthroughs
         WHERE id = $1
       `,
@@ -578,6 +639,8 @@ export async function loadPlaythroughFromPostgres(playthroughId: string): Promis
       status: sessionRow.status,
       startedAt: sessionRow.started_at,
       finishedAt: sessionRow.finished_at ?? undefined,
+      variables: JSON.parse(sessionRow.variables_json || "{}") as PlaythroughState["variables"],
+      triggeredEventIds: JSON.parse(sessionRow.triggered_event_ids_json || "[]") as string[],
       history: historyResult.rows.map((row) => ({
         nodeCode: row.node_code,
         choiceCode: row.choice_code,

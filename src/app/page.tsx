@@ -1,5 +1,10 @@
+import { Suspense } from "react";
 import { InteractivePlayer } from "@/components/interactive-player";
 
 export default function Home() {
-  return <InteractivePlayer />;
+  return (
+    <Suspense fallback={null}>
+      <InteractivePlayer />
+    </Suspense>
+  );
 }
