@@ -30,8 +30,8 @@
 
 相关文件：
 
-- [src/components/admin-story-editor.tsx](/D:/自用素材/互动游戏/互动影游网站/app/src/components/admin-story-editor.tsx)
-- [src/data/sample-story.ts](/D:/自用素材/互动游戏/互动影游网站/app/src/data/sample-story.ts)
+- [src/components/admin-story-editor.tsx](/D:/自用素材/互动游戏/StoryPlay网站/app/src/components/admin-story-editor.tsx)
+- [src/data/sample-story.ts](/D:/自用素材/互动游戏/StoryPlay网站/app/src/data/sample-story.ts)
 
 ### 2. 分支图改成可用于排查结构问题
 
@@ -47,7 +47,7 @@
 
 相关文件：
 
-- [src/components/branch-graph.tsx](/D:/自用素材/互动游戏/互动影游网站/app/src/components/branch-graph.tsx)
+- [src/components/branch-graph.tsx](/D:/自用素材/互动游戏/StoryPlay网站/app/src/components/branch-graph.tsx)
 
 ### 3. 规则系统已经打通到后台编辑
 
@@ -82,9 +82,9 @@
 
 相关文件：
 
-- [src/lib/story-engine.ts](/D:/自用素材/互动游戏/互动影游网站/app/src/lib/story-engine.ts)
-- [src/lib/story-rules.ts](/D:/自用素材/互动游戏/互动影游网站/app/src/lib/story-rules.ts)
-- [src/components/admin-story-editor.tsx](/D:/自用素材/互动游戏/互动影游网站/app/src/components/admin-story-editor.tsx)
+- [src/lib/story-engine.ts](/D:/自用素材/互动游戏/StoryPlay网站/app/src/lib/story-engine.ts)
+- [src/lib/story-rules.ts](/D:/自用素材/互动游戏/StoryPlay网站/app/src/lib/story-rules.ts)
+- [src/components/admin-story-editor.tsx](/D:/自用素材/互动游戏/StoryPlay网站/app/src/components/admin-story-editor.tsx)
 
 ### 4. 前台运行时已真正消费这些规则
 
@@ -99,9 +99,9 @@
 
 相关文件：
 
-- [src/components/interactive-player.tsx](/D:/自用素材/互动游戏/互动影游网站/app/src/components/interactive-player.tsx)
-- [src/lib/playthrough-store.ts](/D:/自用素材/互动游戏/互动影游网站/app/src/lib/playthrough-store.ts)
-- [src/app/api/playthroughs/[playthroughId]/choose/route.ts](/D:/自用素材/互动游戏/互动影游网站/app/src/app/api/playthroughs/[playthroughId]/choose/route.ts)
+- [src/components/interactive-player.tsx](/D:/自用素材/互动游戏/StoryPlay网站/app/src/components/interactive-player.tsx)
+- [src/lib/playthrough-store.ts](/D:/自用素材/互动游戏/StoryPlay网站/app/src/lib/playthrough-store.ts)
+- [src/app/api/playthroughs/[playthroughId]/choose/route.ts](/D:/自用素材/互动游戏/StoryPlay网站/app/src/app/api/playthroughs/[playthroughId]/choose/route.ts)
 
 ### 5. 玩家端体验完成第一轮升级
 
@@ -120,7 +120,7 @@
 
 相关文件：
 
-- [src/components/interactive-player.tsx](/D:/自用素材/互动游戏/互动影游网站/app/src/components/interactive-player.tsx)
+- [src/components/interactive-player.tsx](/D:/自用素材/互动游戏/StoryPlay网站/app/src/components/interactive-player.tsx)
 
 ### 6. 玩家端体验完成第二轮打磨
 
@@ -136,7 +136,7 @@
 
 相关文件：
 
-- [src/components/interactive-player.tsx](/D:/自用素材/互动游戏/互动影游网站/app/src/components/interactive-player.tsx)
+- [src/components/interactive-player.tsx](/D:/自用素材/互动游戏/StoryPlay网站/app/src/components/interactive-player.tsx)
 
 ## 验证结果
 

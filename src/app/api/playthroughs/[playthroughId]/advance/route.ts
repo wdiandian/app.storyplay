@@ -24,7 +24,7 @@ export async function POST(
         : await advancePlaythrough(playthroughId);
 
     return Response.json(
-      serializePlaythrough(await getGame(), result.session, result.node),
+      serializePlaythrough(await getGame(result.session.gameSlug), result.session, result.node),
     );
   } catch (error) {
     return Response.json(

@@ -7,7 +7,13 @@ type BranchGraphProps = {
   game: StoryGame;
   selectedNodeCode: string;
   onSelectNode: (nodeCode: string) => void;
+  onAddNext?: (nodeCode: string) => void;
+  onAddBranch?: (nodeCode: string) => void;
+  onPreviewNode?: (nodeCode: string) => void;
+  filter?: BranchGraphFilter;
 };
+
+export type BranchGraphFilter = "all" | "issues" | "start" | "ending" | "isolated";
 
 type GraphEdge = {
   fromCode: string;
@@ -23,15 +29,16 @@ type PositionedNode = {
   incoming: number;
   outgoing: number;
   missingTargets: number;
+  issueLabels: string[];
   status: "start" | "ending" | "isolated" | "broken" | "connected";
 };
 
 const NODE_WIDTH = 232;
-const NODE_HEIGHT = 128;
+const NODE_HEIGHT = 232;
 const COLUMN_GAP = 140;
-const ROW_GAP = 48;
-const PADDING_X = 36;
-const PADDING_Y = 28;
+const ROW_GAP = 56;
+const PADDING_X = 40;
+const PADDING_Y = 34;
 
 function getNodeDisplayStatus(status: PositionedNode["status"]) {
   if (status === "start") {
@@ -51,6 +58,18 @@ function getNodeDisplayStatus(status: PositionedNode["status"]) {
   }
 
   return "已连通";
+}
+
+function getPlayerSceneLabel(game: StoryGame, node: StoryNode) {
+  if (node.isEnding) {
+    return "结局 UI";
+  }
+
+  if (node.code === game.startNodeCode) {
+    return "开场 UI";
+  }
+
+  return "中段 UI";
 }
 
 function getNodeColors(status: PositionedNode["status"], isSelected: boolean) {
@@ -214,6 +233,12 @@ function buildGraph(game: StoryGame) {
             : outgoing === 0 || missingTargets > 0
               ? "broken"
               : "connected";
+      const issueLabels = [
+        ...(!node.videoUrl.trim() ? ["缺视频"] : []),
+        ...(!isEnding && !node.autoNextNodeCode && !(node.choices?.length ?? 0) ? ["缺出口"] : []),
+        ...(missingTargets > 0 ? ["目标无效"] : []),
+        ...(status === "isolated" ? ["孤立片段"] : []),
+      ];
 
       positions.set(code, {
         node,
@@ -222,6 +247,7 @@ function buildGraph(game: StoryGame) {
         incoming: nodeIncoming,
         outgoing,
         missingTargets,
+        issueLabels,
         status,
       });
     });
@@ -240,8 +266,43 @@ function buildGraph(game: StoryGame) {
   };
 }
 
-export function BranchGraph({ game, selectedNodeCode, onSelectNode }: BranchGraphProps) {
+export function BranchGraph({
+  game,
+  selectedNodeCode,
+  onSelectNode,
+  onAddNext,
+  onAddBranch,
+  onPreviewNode,
+  filter = "all",
+}: BranchGraphProps) {
   const graph = useMemo(() => buildGraph(game), [game]);
+  const visibleEntries = useMemo(
+    () =>
+      Array.from(graph.positions.values()).filter((entry) => {
+        if (filter === "issues") {
+          return entry.issueLabels.length > 0;
+        }
+
+        if (filter === "start") {
+          return entry.status === "start";
+        }
+
+        if (filter === "ending") {
+          return entry.status === "ending";
+        }
+
+        if (filter === "isolated") {
+          return entry.status === "isolated";
+        }
+
+        return true;
+      }),
+    [filter, graph.positions],
+  );
+  const visibleNodeCodes = useMemo(
+    () => new Set(visibleEntries.map((entry) => entry.node.code)),
+    [visibleEntries],
+  );
 
   return (
     <div className="rounded-[1.75rem] border border-stone-900/10 bg-[linear-gradient(180deg,_rgba(255,255,255,0.88)_0%,_rgba(247,244,239,0.96)_100%)] p-4">
@@ -257,7 +318,7 @@ export function BranchGraph({ game, selectedNodeCode, onSelectNode }: BranchGrap
         </span>
       </div>
 
-      <div className="mt-4 overflow-x-auto overflow-y-hidden rounded-[1.5rem] border border-stone-900/10 bg-[#f8f5ef]">
+      <div className="mt-4 overflow-auto rounded-[1.5rem] border border-stone-900/10 bg-[#f8f5ef]">
         <div
           className="relative"
           style={{
@@ -287,6 +348,10 @@ export function BranchGraph({ game, selectedNodeCode, onSelectNode }: BranchGrap
             </defs>
 
             {graph.edges.map((edge, index) => {
+              if (!visibleNodeCodes.has(edge.fromCode) || !visibleNodeCodes.has(edge.toCode)) {
+                return null;
+              }
+
               const from = graph.positions.get(edge.fromCode);
               const to = graph.positions.get(edge.toCode);
 
@@ -349,38 +414,114 @@ export function BranchGraph({ game, selectedNodeCode, onSelectNode }: BranchGrap
             })}
           </svg>
 
-          {Array.from(graph.positions.values()).map((entry) => {
+          {visibleEntries.map((entry) => {
             const isSelected = entry.node.code === selectedNodeCode;
             const colors = getNodeColors(entry.status, isSelected);
+            const canContinue = !entry.node.isEnding;
+            const hasVideo = Boolean(entry.node.videoUrl.trim());
+            const timelineCount = entry.node.timelineEvents?.length ?? 0;
+            const playerSceneLabel = getPlayerSceneLabel(game, entry.node);
+            const actionButtonClass = isSelected
+              ? "border-white/15 bg-white/10 text-white/85 hover:bg-white/15"
+              : "border-stone-900/10 bg-white/80 text-stone-700 hover:border-stone-900/30 hover:bg-white";
 
             return (
-              <button
+              <div
                 key={entry.node.code}
-                type="button"
-                className={`absolute rounded-[1.5rem] border p-4 text-left transition hover:-translate-y-0.5 ${colors.card}`}
+                className={`absolute flex flex-col rounded-[1.5rem] border p-4 text-left transition hover:-translate-y-0.5 ${colors.card}`}
                 style={{
                   left: `${entry.x}px`,
                   top: `${entry.y}px`,
                   width: `${NODE_WIDTH}px`,
                   height: `${NODE_HEIGHT}px`,
                 }}
-                onClick={() => onSelectNode(entry.node.code)}
               >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="line-clamp-1 text-sm font-medium">{entry.node.title}</div>
-                  <span className={`rounded-full border px-2 py-1 text-[10px] ${colors.badge}`}>
-                    {getNodeDisplayStatus(entry.status)}
-                  </span>
+                <button
+                  type="button"
+                  className="block min-h-0 flex-1 text-left"
+                  onClick={() => onSelectNode(entry.node.code)}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="line-clamp-1 text-sm font-medium">{entry.node.title}</div>
+                      <div className={`mt-1 truncate text-xs ${colors.sub}`}>{entry.node.code}</div>
+                    </div>
+                    <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] ${colors.badge}`}>
+                      {getNodeDisplayStatus(entry.status)}
+                    </span>
+                  </div>
+
+                  <div className={`mt-3 grid grid-cols-3 gap-1.5 text-center text-[10px] ${colors.sub}`}>
+                    <span className="rounded-xl border border-current/10 px-1.5 py-1">
+                      {hasVideo ? "有视频" : "缺视频"}
+                    </span>
+                    <span className="rounded-xl border border-current/10 px-1.5 py-1">
+                      出口 {entry.outgoing}
+                    </span>
+                    <span className="rounded-xl border border-current/10 px-1.5 py-1">
+                      时间线 {timelineCount}
+                    </span>
+                  </div>
+
+                  <div className={`mt-2 rounded-xl border border-current/10 px-2 py-1 text-[10px] ${colors.sub}`}>
+                    玩家侧：{playerSceneLabel}
+                  </div>
+
+                  <div className={`mt-2 flex max-h-9 flex-wrap gap-1.5 overflow-hidden text-[11px] ${colors.sub}`}>
+                    <span>入口 {entry.incoming}</span>
+                    {entry.issueLabels.map((issue) => (
+                      <span key={`${entry.node.code}-${issue}`}>{issue}</span>
+                    ))}
+                  </div>
+                </button>
+
+                <div className="mt-3 grid shrink-0 grid-cols-2 gap-2 border-t border-current/10 pt-3">
+                  <button
+                    type="button"
+                    className={`rounded-full border px-2 py-2 text-[11px] leading-none transition ${actionButtonClass}`}
+                    onClick={() => onSelectNode(entry.node.code)}
+                  >
+                    编辑
+                  </button>
+                  <button
+                    type="button"
+                    className={`rounded-full border px-2 py-2 text-[11px] leading-none transition ${actionButtonClass}`}
+                    onClick={() => onPreviewNode?.(entry.node.code)}
+                  >
+                    试玩
+                  </button>
+                  {canContinue ? (
+                    <>
+                      <button
+                        type="button"
+                        className={`rounded-full border px-2 py-2 text-[11px] leading-none transition ${actionButtonClass}`}
+                        onClick={() => onAddNext?.(entry.node.code)}
+                      >
+                        加下一幕
+                      </button>
+                      <button
+                        type="button"
+                        className={`rounded-full border px-2 py-2 text-[11px] leading-none transition ${actionButtonClass}`}
+                        onClick={() => onAddBranch?.(entry.node.code)}
+                      >
+                        加分支
+                      </button>
+                    </>
+                  ) : (
+                    <span className={`col-span-2 rounded-full border px-2 py-2 text-center text-[11px] leading-none ${colors.badge}`}>
+                      结局片段不可继续
+                    </span>
+                  )}
                 </div>
-                <div className={`mt-2 text-xs ${colors.sub}`}>{entry.node.code}</div>
-                <div className={`mt-4 flex flex-wrap gap-2 text-[11px] ${colors.sub}`}>
-                  <span>入口 {entry.incoming}</span>
-                  <span>出口 {entry.outgoing}</span>
-                  {entry.missingTargets > 0 ? <span>缺失目标 {entry.missingTargets}</span> : null}
-                </div>
-              </button>
+              </div>
             );
           })}
+
+          {!visibleEntries.length ? (
+            <div className="absolute left-9 top-7 w-[360px] rounded-[1.5rem] border border-dashed border-stone-900/15 bg-white/80 px-5 py-6 text-sm leading-7 text-stone-600">
+              当前筛选下没有匹配的片段。切回“全部”可以查看完整剧情树。
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

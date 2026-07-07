@@ -4,6 +4,7 @@ import type { EndingTone } from "@/lib/story-engine";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
+  const projectSlug = new URL(request.url).searchParams.get("project")?.trim() || "";
   const body = (await request.json()) as {
     code?: string;
     title?: string;
@@ -16,7 +17,7 @@ export async function POST(request: Request) {
   };
 
   try {
-    const node = await createNode({
+    const node = await createNode(projectSlug, {
       code: body.code ?? "",
       title: body.title ?? "",
       description: body.description ?? "",
@@ -29,7 +30,7 @@ export async function POST(request: Request) {
 
     return Response.json(
       {
-        game: await getGame(),
+        game: await getGame(projectSlug),
         node,
       },
       { status: 201 },

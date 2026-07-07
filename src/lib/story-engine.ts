@@ -86,6 +86,8 @@ export type StoryGame = {
   slug: string;
   title: string;
   tagline: string;
+  listedOnHome: boolean;
+  sortOrder: number;
   intro: string;
   promoVideoUrl: string;
   promoPosterUrl: string;
@@ -93,6 +95,18 @@ export type StoryGame = {
   startNodeCode: string;
   variables?: VariableDefinition[];
   nodes: StoryNode[];
+};
+
+export type ProjectSummary = {
+  id: string;
+  slug: string;
+  title: string;
+  tagline: string;
+  listedOnHome: boolean;
+  sortOrder: number;
+  promoVideoUrl: string;
+  promoPosterUrl: string;
+  updatedAt: string;
 };
 
 export type ChoiceLog = {

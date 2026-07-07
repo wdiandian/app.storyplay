@@ -5,12 +5,7 @@ import {
   clonePlaythroughState,
   matchesConditions,
 } from "@/lib/story-rules";
-import {
-  createPlaythroughRecordForStorage,
-  loadPlaythroughFromStorage,
-  replaceChoiceLogsForStorage,
-  updatePlaythroughRecordForStorage,
-} from "@/lib/storage";
+import { loadPlaythroughFromStorage, upsertPlaythroughForStorage } from "@/lib/storage";
 import {
   getNodeByCode,
   type ChoiceLog,
@@ -40,8 +35,12 @@ async function getPlaythroughOrThrow(playthroughId: string) {
   return session;
 }
 
+async function getSessionGame(session: PlaythroughState) {
+  return getGame(session.gameSlug);
+}
+
 async function markCompletionIfNeeded(session: PlaythroughState, nodeCode: string) {
-  const node = getNodeByCode(await getGame(), nodeCode);
+  const node = getNodeByCode(await getSessionGame(session), nodeCode);
 
   if (node.isEnding) {
     session.status = "completed";
@@ -49,35 +48,24 @@ async function markCompletionIfNeeded(session: PlaythroughState, nodeCode: strin
   }
 }
 
-function normalizeTriggeredEvents(
-  session: PlaythroughState,
-  nextNodeCode?: string,
-) {
+function normalizeTriggeredEvents(session: PlaythroughState, nextNodeCode?: string) {
   if (nextNodeCode && session.currentNodeCode !== nextNodeCode) {
     session.triggeredEventIds = [];
   }
 }
 
-function applyChoiceRuntimeEffects(
-  session: PlaythroughState,
-  choice: StoryChoice,
-  sourceNode: StoryNode,
-) {
+function applyChoiceRuntimeEffects(session: PlaythroughState, choice: StoryChoice, sourceNode: StoryNode) {
   if (!matchesConditions(choice.conditions, session.variables)) {
     throw new Error(`Choice conditions are not satisfied: ${choice.code}`);
   }
 
   session.variables = applyActions(session.variables, choice.actions);
-
   session.history.push(buildChoiceLog(sourceNode, choice));
 }
 
-export async function triggerTimelineEvent(
-  playthroughId: string,
-  event: TimelineEvent,
-) {
-  const game = await getGame();
+export async function triggerTimelineEvent(playthroughId: string, event: TimelineEvent) {
   const session = clonePlaythroughState(await getPlaythroughOrThrow(playthroughId));
+  const game = await getSessionGame(session);
 
   if (session.triggeredEventIds.includes(event.id)) {
     return {
@@ -92,7 +80,7 @@ export async function triggerTimelineEvent(
 
   session.variables = applyActions(session.variables, event.actions);
   session.triggeredEventIds.push(event.id);
-  await updatePlaythroughRecordForStorage(session);
+  await upsertPlaythroughForStorage(session);
 
   return {
     session,
@@ -100,18 +88,18 @@ export async function triggerTimelineEvent(
   };
 }
 
-export async function createPlaythrough() {
-  const game = await getGame();
+export async function createPlaythrough(projectSlug: string) {
+  const game = await getGame(projectSlug);
 
   if (!game.startNodeCode) {
     throw new Error("Project has no start node");
   }
 
-  return createPlaythroughFromNode(game.startNodeCode);
+  return createPlaythroughFromNode(projectSlug, game.startNodeCode);
 }
 
-export async function createPlaythroughFromNode(startNodeCode: string) {
-  const game = await getGame();
+export async function createPlaythroughFromNode(projectSlug: string, startNodeCode: string) {
+  const game = await getGame(projectSlug);
   const normalizedStartNodeCode = startNodeCode.trim();
 
   if (!normalizedStartNodeCode) {
@@ -120,9 +108,8 @@ export async function createPlaythroughFromNode(startNodeCode: string) {
 
   getNodeByCode(game, normalizedStartNodeCode);
 
-  const id = crypto.randomUUID();
   const session: PlaythroughState = {
-    id,
+    id: crypto.randomUUID(),
     gameSlug: game.slug,
     currentNodeCode: normalizedStartNodeCode,
     status: "in_progress",
@@ -133,7 +120,7 @@ export async function createPlaythroughFromNode(startNodeCode: string) {
   };
 
   await markCompletionIfNeeded(session, session.currentNodeCode);
-  await createPlaythroughRecordForStorage(session);
+  await upsertPlaythroughForStorage(session);
 
   return {
     session,
@@ -142,22 +129,22 @@ export async function createPlaythroughFromNode(startNodeCode: string) {
 }
 
 export async function getCurrentNode(playthroughId: string) {
-  const game = await getGame();
   const session = await getPlaythroughOrThrow(playthroughId);
+  const game = await getSessionGame(session);
   const node = getNodeByCode(game, session.currentNodeCode);
 
   return {
     session,
     node,
+    game,
   };
 }
 
 export async function chooseBranch(playthroughId: string, choiceCode: string) {
-  const game = await getGame();
   const session = clonePlaythroughState(await getPlaythroughOrThrow(playthroughId));
+  const game = await getSessionGame(session);
   const currentNode = getNodeByCode(game, session.currentNodeCode);
-  const choices = currentNode.choices ?? [];
-  const selectedChoice = choices.find((choice) => choice.code === choiceCode);
+  const selectedChoice = (currentNode.choices ?? []).find((choice) => choice.code === choiceCode);
 
   if (!selectedChoice) {
     throw new Error("Choice not found on current node");
@@ -167,8 +154,7 @@ export async function chooseBranch(playthroughId: string, choiceCode: string) {
   normalizeTriggeredEvents(session, selectedChoice.targetNodeCode);
   session.currentNodeCode = selectedChoice.targetNodeCode;
   await markCompletionIfNeeded(session, session.currentNodeCode);
-  await updatePlaythroughRecordForStorage(session);
-  await replaceChoiceLogsForStorage(session.id, session.history);
+  await upsertPlaythroughForStorage(session);
 
   return {
     session,
@@ -181,8 +167,8 @@ export async function chooseTimelineBranch(
   choice: StoryChoice,
   sourceNodeCode?: string,
 ) {
-  const game = await getGame();
   const session = clonePlaythroughState(await getPlaythroughOrThrow(playthroughId));
+  const game = await getSessionGame(session);
   const currentNode = getNodeByCode(game, session.currentNodeCode);
   const logNode = sourceNodeCode ? getNodeByCode(game, sourceNodeCode) : currentNode;
 
@@ -196,8 +182,7 @@ export async function chooseTimelineBranch(
   normalizeTriggeredEvents(session, choice.targetNodeCode);
   session.currentNodeCode = choice.targetNodeCode;
   await markCompletionIfNeeded(session, session.currentNodeCode);
-  await updatePlaythroughRecordForStorage(session);
-  await replaceChoiceLogsForStorage(session.id, session.history);
+  await upsertPlaythroughForStorage(session);
 
   return {
     session,
@@ -206,8 +191,8 @@ export async function chooseTimelineBranch(
 }
 
 export async function advancePlaythrough(playthroughId: string) {
-  const game = await getGame();
   const session = clonePlaythroughState(await getPlaythroughOrThrow(playthroughId));
+  const game = await getSessionGame(session);
   const currentNode = getNodeByCode(game, session.currentNodeCode);
 
   if (!currentNode.autoNextNodeCode) {
@@ -217,7 +202,7 @@ export async function advancePlaythrough(playthroughId: string) {
   normalizeTriggeredEvents(session, currentNode.autoNextNodeCode);
   session.currentNodeCode = currentNode.autoNextNodeCode;
   await markCompletionIfNeeded(session, session.currentNodeCode);
-  await updatePlaythroughRecordForStorage(session);
+  await upsertPlaythroughForStorage(session);
 
   return {
     session,
@@ -226,7 +211,8 @@ export async function advancePlaythrough(playthroughId: string) {
 }
 
 export async function restartPlaythrough(playthroughId: string) {
-  const game = await getGame();
+  const session = await getPlaythroughOrThrow(playthroughId);
+  const game = await getSessionGame(session);
 
   if (!game.startNodeCode) {
     throw new Error("Project has no start node");
@@ -236,8 +222,8 @@ export async function restartPlaythrough(playthroughId: string) {
 }
 
 export async function restartPlaythroughFromNode(playthroughId: string, startNodeCode: string) {
-  const game = await getGame();
   const session = clonePlaythroughState(await getPlaythroughOrThrow(playthroughId));
+  const game = await getSessionGame(session);
   const normalizedStartNodeCode = startNodeCode.trim();
 
   if (!normalizedStartNodeCode) {
@@ -253,8 +239,7 @@ export async function restartPlaythroughFromNode(playthroughId: string, startNod
   session.finishedAt = undefined;
   session.variables = buildInitialVariableState(game);
   session.triggeredEventIds = [];
-  await updatePlaythroughRecordForStorage(session);
-  await replaceChoiceLogsForStorage(session.id, session.history);
+  await upsertPlaythroughForStorage(session);
 
   return {
     session,

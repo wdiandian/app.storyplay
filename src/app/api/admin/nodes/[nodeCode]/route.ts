@@ -14,6 +14,7 @@ export async function PATCH(
   context: { params: Promise<{ nodeCode: string }> },
 ) {
   const { nodeCode } = await context.params;
+  const projectSlug = new URL(request.url).searchParams.get("project")?.trim() || "";
   const body = (await request.json()) as {
     title?: string;
     description?: string;
@@ -27,10 +28,10 @@ export async function PATCH(
   };
 
   try {
-    const node = await updateNodeDetails(nodeCode, body);
+    const node = await updateNodeDetails(projectSlug, nodeCode, body);
 
     return Response.json({
-      game: await getGame(),
+      game: await getGame(projectSlug),
       node,
     });
   } catch (error) {
@@ -44,13 +45,14 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ nodeCode: string }> },
 ) {
   const { nodeCode } = await context.params;
+  const projectSlug = new URL(request.url).searchParams.get("project")?.trim() || "";
 
   try {
-    const game = await deleteNodeByCode(nodeCode);
+    const game = await deleteNodeByCode(projectSlug, nodeCode);
 
     return Response.json({
       game,

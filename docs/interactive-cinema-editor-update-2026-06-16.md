@@ -1,4 +1,4 @@
-# 互动影游编辑器开发更新
+# StoryPlay编辑器开发更新
 
 日期：2026-06-16
 
@@ -54,20 +54,20 @@
 - `目标场景` 统一为 `目标片段`
 - 素材区、项目配置区、发布检查区的一部分文案改成更通用的平台表达
 
-目标是让这套后台更像“互动影游编辑器”，而不是某个特定作品的配置页。
+目标是让这套后台更像“StoryPlay编辑器”，而不是某个特定作品的配置页。
 
 ## 代码层改动点
 
 主要涉及：
 
-- [src/components/admin-story-editor.tsx](/D:/自用素材/互动游戏/互动影游网站/app/src/components/admin-story-editor.tsx)
-- [src/components/interactive-player.tsx](/D:/自用素材/互动游戏/互动影游网站/app/src/components/interactive-player.tsx)
-- [src/lib/game-store.ts](/D:/自用素材/互动游戏/互动影游网站/app/src/lib/game-store.ts)
-- [src/lib/playthrough-store.ts](/D:/自用素材/互动游戏/互动影游网站/app/src/lib/playthrough-store.ts)
-- [src/app/api/admin/nodes/[nodeCode]/route.ts](/D:/自用素材/互动游戏/互动影游网站/app/src/app/api/admin/nodes/[nodeCode]/route.ts)
-- [src/app/api/playthroughs/route.ts](/D:/自用素材/互动游戏/互动影游网站/app/src/app/api/playthroughs/route.ts)
-- [src/app/api/playthroughs/[playthroughId]/advance/route.ts](/D:/自用素材/互动游戏/互动影游网站/app/src/app/api/playthroughs/[playthroughId]/advance/route.ts)
-- [src/app/page.tsx](/D:/自用素材/互动游戏/互动影游网站/app/src/app/page.tsx)
+- [src/components/admin-story-editor.tsx](/D:/自用素材/互动游戏/StoryPlay网站/app/src/components/admin-story-editor.tsx)
+- [src/components/interactive-player.tsx](/D:/自用素材/互动游戏/StoryPlay网站/app/src/components/interactive-player.tsx)
+- [src/lib/game-store.ts](/D:/自用素材/互动游戏/StoryPlay网站/app/src/lib/game-store.ts)
+- [src/lib/playthrough-store.ts](/D:/自用素材/互动游戏/StoryPlay网站/app/src/lib/playthrough-store.ts)
+- [src/app/api/admin/nodes/[nodeCode]/route.ts](/D:/自用素材/互动游戏/StoryPlay网站/app/src/app/api/admin/nodes/[nodeCode]/route.ts)
+- [src/app/api/playthroughs/route.ts](/D:/自用素材/互动游戏/StoryPlay网站/app/src/app/api/playthroughs/route.ts)
+- [src/app/api/playthroughs/[playthroughId]/advance/route.ts](/D:/自用素材/互动游戏/StoryPlay网站/app/src/app/api/playthroughs/[playthroughId]/advance/route.ts)
+- [src/app/page.tsx](/D:/自用素材/互动游戏/StoryPlay网站/app/src/app/page.tsx)
 
 ## 验证结果
 

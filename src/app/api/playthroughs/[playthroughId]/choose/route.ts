@@ -26,7 +26,7 @@ export async function POST(
         ? await chooseTimelineBranch(playthroughId, body.runtimeChoice, body.sourceNodeCode)
         : await chooseBranch(playthroughId, body.choiceCode as string);
 
-    return Response.json(serializePlaythrough(await getGame(), session, node));
+    return Response.json(serializePlaythrough(await getGame(session.gameSlug), session, node));
   } catch (error) {
     return Response.json(
       {

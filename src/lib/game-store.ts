@@ -1,8 +1,9 @@
-import { blankStorySeed } from "@/data/sample-story";
+import { createProjectSeed } from "@/lib/project-utils";
 import {
   getNodeByCode,
   type ConditionRule,
   type EndingTone,
+  type ProjectSummary,
   type StoryChoice,
   type StoryGame,
   type StoryNode,
@@ -11,18 +12,20 @@ import {
   type VariableDefinition,
 } from "@/lib/story-engine";
 import {
-  insertChoice,
-  insertNode,
-  loadGame,
-  persistGame,
-  replaceGame,
-  resetStorageToSeed,
-  updateNode,
+  createProject,
+  ensureProject,
+  listProjects,
+  loadProject,
+  removeProject,
+  saveProject,
 } from "@/lib/storage";
 
 type GameSettingsInput = {
   title?: string;
+  slug?: string;
   tagline?: string;
+  listedOnHome?: boolean;
+  sortOrder?: number;
   intro?: string;
   promoVideoUrl?: string;
   promoPosterUrl?: string;
@@ -109,20 +112,33 @@ function sanitizeNode(input: NodeInput): StoryNode {
     transcript: input.transcript.trim(),
     videoUrl: input.videoUrl.trim(),
     nodeType: input.nodeType,
-    autoNextNodeCode:
-      !isEnding && autoNextNodeCode ? autoNextNodeCode : undefined,
+    autoNextNodeCode: !isEnding && autoNextNodeCode ? autoNextNodeCode : undefined,
     isEnding,
     endingTone: isEnding ? input.endingTone ?? "truth" : undefined,
     choices: [],
   };
 }
 
-export async function getGame() {
-  return loadGame();
+export async function listProjectSummaries(): Promise<ProjectSummary[]> {
+  return listProjects();
 }
 
-export async function updateGameSettings(input: GameSettingsInput) {
-  const game = await getGame();
+export async function getGame(projectSlug?: string) {
+  return ensureProject(projectSlug);
+}
+
+export async function getProject(projectSlug: string) {
+  return loadProject(projectSlug);
+}
+
+export async function createBlankProject(input?: Partial<StoryGame>) {
+  const project = createProjectSeed(input);
+  await createProject(project);
+  return project;
+}
+
+export async function updateGameSettings(projectSlug: string, input: GameSettingsInput) {
+  const game = await getGame(projectSlug);
 
   if (typeof input.startNodeCode === "string") {
     const normalizedStartNodeCode = input.startNodeCode.trim();
@@ -138,8 +154,20 @@ export async function updateGameSettings(input: GameSettingsInput) {
     game.title = input.title.trim();
   }
 
+  if (typeof input.slug === "string" && input.slug.trim()) {
+    game.slug = input.slug.trim();
+  }
+
   if (typeof input.tagline === "string") {
     game.tagline = input.tagline.trim();
+  }
+
+  if (typeof input.listedOnHome === "boolean") {
+    game.listedOnHome = input.listedOnHome;
+  }
+
+  if (typeof input.sortOrder === "number" && Number.isFinite(input.sortOrder)) {
+    game.sortOrder = input.sortOrder;
   }
 
   if (typeof input.intro === "string") {
@@ -168,22 +196,12 @@ export async function updateGameSettings(input: GameSettingsInput) {
     }));
   }
 
-  await persistGame({
-    title: game.title,
-    tagline: game.tagline,
-    intro: game.intro,
-    promoVideoUrl: game.promoVideoUrl,
-    promoPosterUrl: game.promoPosterUrl,
-    promoText: game.promoText,
-    startNodeCode: game.startNodeCode,
-    variables: game.variables,
-  });
-
+  await saveProject(game);
   return game;
 }
 
-export async function createNode(input: NodeInput) {
-  const game = await getGame();
+export async function createNode(projectSlug: string, input: NodeInput) {
+  const game = await getGame(projectSlug);
   const node = sanitizeNode(input);
 
   if (!node.code) {
@@ -198,33 +216,25 @@ export async function createNode(input: NodeInput) {
     throw new Error("Node title is required");
   }
 
-  if (!node.videoUrl) {
-    throw new Error("Video URL is required");
-  }
-
   if (node.autoNextNodeCode) {
     assertNodeExists(game, node.autoNextNodeCode);
   }
 
-  await insertNode(node);
+  game.nodes.push(node);
 
   if (!game.startNodeCode) {
     game.startNodeCode = node.code;
-    await persistGame({
-      startNodeCode: node.code,
-    });
   }
 
+  await saveProject(game);
   return node;
 }
 
-export async function updateNodeDetails(nodeCode: string, input: NodeUpdateInput) {
-  const game = await getGame();
+export async function updateNodeDetails(projectSlug: string, nodeCode: string, input: NodeUpdateInput) {
+  const game = await getGame(projectSlug);
   const node = getNodeByCode(game, nodeCode);
   const nextNodeType = input.nodeType ?? node.nodeType;
-  const nextAutoNextCode = normalizeOptionalNodeCode(
-    input.autoNextNodeCode ?? node.autoNextNodeCode,
-  );
+  const nextAutoNextCode = normalizeOptionalNodeCode(input.autoNextNodeCode ?? node.autoNextNodeCode);
 
   if (typeof input.title === "string") {
     node.title = input.title.trim();
@@ -245,8 +255,7 @@ export async function updateNodeDetails(nodeCode: string, input: NodeUpdateInput
   node.nodeType = nextNodeType;
   node.isEnding = nextNodeType === "ending";
   node.endingTone = node.isEnding ? input.endingTone ?? node.endingTone ?? "truth" : undefined;
-  node.autoNextNodeCode =
-    !node.isEnding && nextAutoNextCode ? nextAutoNextCode : undefined;
+  node.autoNextNodeCode = !node.isEnding && nextAutoNextCode ? nextAutoNextCode : undefined;
 
   if (node.autoNextNodeCode) {
     assertNodeExists(game, node.autoNextNodeCode);
@@ -305,7 +314,7 @@ export async function updateNodeDetails(nodeCode: string, input: NodeUpdateInput
     });
   }
 
-  await updateNode(node);
+  await saveProject(game);
   return node;
 }
 
@@ -363,8 +372,8 @@ function removeNodeReferences(node: StoryNode, nodeCode: string) {
   };
 }
 
-export async function deleteNodeByCode(nodeCode: string) {
-  const game = await getGame();
+export async function deleteNodeByCode(projectSlug: string, nodeCode: string) {
+  const game = await getGame(projectSlug);
   const normalizedNodeCode = nodeCode.trim();
 
   if (!normalizedNodeCode) {
@@ -381,23 +390,16 @@ export async function deleteNodeByCode(nodeCode: string) {
     .filter((node) => node.code !== normalizedNodeCode)
     .map((node) => removeNodeReferences(structuredClone(node), normalizedNodeCode));
 
-  const nextStartNodeCode =
-    game.startNodeCode === normalizedNodeCode
-      ? remainingNodes[0]?.code ?? ""
-      : game.startNodeCode;
+  game.nodes = remainingNodes;
+  game.startNodeCode =
+    game.startNodeCode === normalizedNodeCode ? remainingNodes[0]?.code ?? "" : game.startNodeCode;
 
-  const nextGame: StoryGame = {
-    ...game,
-    startNodeCode: nextStartNodeCode,
-    nodes: remainingNodes,
-  };
-
-  await replaceGame(nextGame);
-  return getGame();
+  await saveProject(game);
+  return game;
 }
 
-export async function addChoice(nodeCode: string, input: ChoiceInput) {
-  const game = await getGame();
+export async function addChoice(projectSlug: string, nodeCode: string, input: ChoiceInput) {
+  const game = await getGame(projectSlug);
   const node = getNodeByCode(game, nodeCode);
   const choice = sanitizeChoice(input);
 
@@ -418,13 +420,20 @@ export async function addChoice(nodeCode: string, input: ChoiceInput) {
   }
 
   node.choices = [...existingChoices, choice];
-  await insertChoice(nodeCode, choice);
+  await saveProject(game);
   return choice;
 }
 
-export async function resetGameToBlankProject() {
-  await resetStorageToSeed(blankStorySeed);
-  return getGame();
+export async function resetGameToBlankProject(projectSlug: string) {
+  const current = await getGame(projectSlug);
+  const next = createProjectSeed({
+    id: current.id,
+    slug: current.slug,
+    title: current.title,
+  });
+
+  await saveProject(next);
+  return next;
 }
 
 function sanitizeImportedChoice(choice: StoryChoice): StoryChoice {
@@ -472,6 +481,8 @@ function sanitizeImportedGame(input: StoryGame): StoryGame {
     slug: input.slug.trim(),
     title: input.title.trim(),
     tagline: input.tagline.trim(),
+    listedOnHome: input.listedOnHome ?? true,
+    sortOrder: input.sortOrder ?? 0,
     intro: input.intro.trim(),
     promoVideoUrl: input.promoVideoUrl.trim(),
     promoPosterUrl: input.promoPosterUrl.trim(),
@@ -501,12 +512,8 @@ function validateImportedGame(game: StoryGame) {
     throw new Error("Game title is required");
   }
 
-  if (!game.startNodeCode) {
-    throw new Error("Start node code is required");
-  }
-
-  if (!game.nodes.length) {
-    throw new Error("Imported project must include at least one node");
+  if (game.startNodeCode && !game.nodes.find((node) => node.code === game.startNodeCode)) {
+    throw new Error(`Start node not found: ${game.startNodeCode}`);
   }
 
   const seenVariableKeys = new Set<string>();
@@ -537,92 +544,39 @@ function validateImportedGame(game: StoryGame) {
     nodeCodes.add(node.code);
   }
 
-  if (!nodeCodes.has(game.startNodeCode)) {
-    throw new Error(`Start node not found: ${game.startNodeCode}`);
-  }
-
   for (const node of game.nodes) {
     if (!node.title) {
       throw new Error(`Node title is required: ${node.code}`);
     }
 
-    if (!node.videoUrl) {
-      throw new Error(`Node video URL is required: ${node.code}`);
-    }
-
     if (node.autoNextNodeCode && !nodeCodes.has(node.autoNextNodeCode)) {
       throw new Error(`Auto next node not found: ${node.code} -> ${node.autoNextNodeCode}`);
-    }
-
-    const seenEventIds = new Set<string>();
-
-    for (const event of node.timelineEvents ?? []) {
-      if (!event.id) {
-        throw new Error(`Timeline event id is required on node: ${node.code}`);
-      }
-
-      if (seenEventIds.has(event.id)) {
-        throw new Error(`Duplicate timeline event id on node ${node.code}: ${event.id}`);
-      }
-
-      if (!Number.isFinite(event.atMs) || event.atMs < 0) {
-        throw new Error(`Invalid timeline event time on node ${node.code}: ${event.id}`);
-      }
-
-      for (const condition of event.conditions ?? []) {
-        if (!condition.variableKey) {
-          throw new Error(`Timeline event condition variable is required: ${node.code}/${event.id}`);
-        }
-      }
-
-      for (const action of event.actions ?? []) {
-        if (!action.variableKey) {
-          throw new Error(`Timeline event action variable is required: ${node.code}/${event.id}`);
-        }
-      }
-
-      seenEventIds.add(event.id);
-    }
-
-    const seenChoiceCodes = new Set<string>();
-
-    for (const choice of node.choices ?? []) {
-      if (!choice.code) {
-        throw new Error(`Choice code is required on node: ${node.code}`);
-      }
-
-      if (seenChoiceCodes.has(choice.code)) {
-        throw new Error(`Duplicate choice code on node ${node.code}: ${choice.code}`);
-      }
-
-      if (!nodeCodes.has(choice.targetNodeCode)) {
-        throw new Error(`Choice target not found: ${node.code} -> ${choice.targetNodeCode}`);
-      }
-
-      for (const condition of choice.conditions ?? []) {
-        if (!condition.variableKey) {
-          throw new Error(`Choice condition variable is required: ${node.code}/${choice.code}`);
-        }
-      }
-
-      for (const action of choice.actions ?? []) {
-        if (!action.variableKey) {
-          throw new Error(`Choice action variable is required: ${node.code}/${choice.code}`);
-        }
-      }
-
-      seenChoiceCodes.add(choice.code);
     }
   }
 }
 
-export async function exportGameData() {
-  return getGame();
+export async function exportGameData(projectSlug: string) {
+  return getGame(projectSlug);
 }
 
-export async function importGameData(input: StoryGame) {
+export async function importGameData(projectSlug: string, input: StoryGame) {
+  const current = await getGame(projectSlug);
   const game = sanitizeImportedGame(input);
   validateImportedGame(game);
-  await replaceGame(game);
-  return getGame();
+  game.id = current.id;
+  game.slug = current.slug;
+  await saveProject(game);
+  return game;
+}
+
+export async function deleteProjectBySlug(projectSlug: string) {
+  const projects = await listProjects();
+
+  if (projects.length <= 1) {
+    throw new Error("At least one project must remain");
+  }
+
+  await removeProject(projectSlug);
+  const remaining = await listProjects();
+  return remaining;
 }

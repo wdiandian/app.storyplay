@@ -2,7 +2,7 @@
 
 ## 本轮目标
 
-这一轮不再继续做后台或规则系统，而是集中处理玩家端体验，把现有前台从“视频页面 + 选项卡片”推进到更接近互动影游的舞台式呈现。
+这一轮不再继续做后台或规则系统，而是集中处理玩家端体验，把现有前台从“视频页面 + 选项卡片”推进到更接近StoryPlay的舞台式呈现。
 
 本轮重点：
 
@@ -46,7 +46,7 @@
 
 前者是更强的章节切换感，后者是更贴近镜头开场的场景入场提示。
 
-这样比单一转场提示更适合互动影游，因为玩家会同时感知“叙事章节变化”和“场景镜头开始”。
+这样比单一转场提示更适合StoryPlay，因为玩家会同时感知“叙事章节变化”和“场景镜头开始”。
 
 ### 4. 决策时刻拆成独立演出层
 
@@ -83,8 +83,8 @@
 
 ## 相关文件
 
-- [src/components/interactive-player.tsx](/D:/自用素材/互动游戏/互动影游网站/app/src/components/interactive-player.tsx)
-- [src/app/globals.css](/D:/自用素材/互动游戏/互动影游网站/app/src/app/globals.css)
+- [src/components/interactive-player.tsx](/D:/自用素材/互动游戏/StoryPlay网站/app/src/components/interactive-player.tsx)
+- [src/app/globals.css](/D:/自用素材/互动游戏/StoryPlay网站/app/src/app/globals.css)
 
 ## 验证结果
 
@@ -99,7 +99,7 @@
 
 ## 当前结论
 
-到这一步，前台已经从“可播放的互动视频页”进入到“有明显作品感和关键时刻演出感的互动影游前台”。
+到这一步，前台已经从“可播放的互动视频页”进入到“有明显作品感和关键时刻演出感的StoryPlay前台”。
 
 但它还不是最终形态，原因有三点：
 

@@ -2,9 +2,10 @@ import { exportGameData } from "@/lib/game-store";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const game = await exportGameData();
+    const projectSlug = new URL(request.url).searchParams.get("project")?.trim() || "";
+    const game = await exportGameData(projectSlug);
 
     return new Response(JSON.stringify({ game }, null, 2), {
       status: 200,

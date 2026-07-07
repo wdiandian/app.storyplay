@@ -103,6 +103,30 @@ type RuntimeActionEntry = {
   detail: string;
 };
 
+type SceneStage = "opening" | "middle" | "ending";
+
+type ScenePresentation = {
+  stage: SceneStage;
+  label: string;
+  eyebrow: string;
+  title: string;
+  helper: string;
+  mainBackground: string;
+  ambientBackground: string;
+  frameClassName: string;
+  videoOverlayClassName: string;
+  vignetteClassName: string;
+  badgeClassName: string;
+  titlePanelClassName: string;
+  choiceShellClassName: string;
+  choiceEyebrowClassName: string;
+  choicePrompt: string;
+  choiceHelper: string;
+  transitionBackground: string;
+  transitionLineClassName: string;
+  transitionTextClassName: string;
+};
+
 const toneLabel: Record<NonNullable<NodePayload["endingTone"]>, string> = {
   truth: "真相结局",
   survival: "生存结局",
@@ -117,6 +141,99 @@ const toneAccent: Record<NonNullable<NodePayload["endingTone"]>, string> = {
 
 const autoAdvanceDurationMs = 1200;
 const playbackRates = [1, 1.25, 1.5, 2];
+
+const scenePresentations: Record<SceneStage, ScenePresentation> = {
+  opening: {
+    stage: "opening",
+    label: "开场",
+    eyebrow: "片头建立",
+    title: "序幕开启",
+    helper: "先进入人物、世界观和第一组关键关系。",
+    mainBackground: "min-h-screen bg-[#050608] text-stone-100",
+    ambientBackground:
+      "bg-[radial-gradient(circle_at_18%_12%,_rgba(245,158,11,0.26),_transparent_24%),radial-gradient(circle_at_80%_16%,_rgba(14,165,233,0.14),_transparent_20%),linear-gradient(180deg,_#18110c_0%,_#08090b_42%,_#030405_100%)]",
+    frameClassName:
+      "relative w-full overflow-hidden rounded-none border-0 bg-black/52 shadow-[0_50px_180px_rgba(120,53,15,0.34)] sm:rounded-[2.8rem] sm:border sm:border-amber-200/12",
+    videoOverlayClassName:
+      "pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,_rgba(12,8,3,0.48)_0%,_rgba(0,0,0,0.02)_28%,_rgba(0,0,0,0.78)_100%)]",
+    vignetteClassName:
+      "pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_45%_38%,_transparent_34%,_rgba(69,26,3,0.22)_72%,_rgba(0,0,0,0.56)_100%)]",
+    badgeClassName:
+      "inline-flex rounded-full border border-amber-200/20 bg-amber-200/10 px-3 py-1 text-[11px] uppercase tracking-[0.35em] text-amber-100 backdrop-blur",
+    titlePanelClassName:
+      "rounded-[1.5rem] border border-amber-200/16 bg-black/38 px-4 py-3 shadow-[0_18px_60px_rgba(245,158,11,0.10)] backdrop-blur-xl",
+    choiceShellClassName:
+      "mb-3 rounded-[1.6rem] border border-amber-200/18 bg-black/58 px-4 py-4 shadow-[0_20px_60px_rgba(245,158,11,0.12)] backdrop-blur-xl sm:mb-4 sm:rounded-[1.8rem] sm:px-5",
+    choiceEyebrowClassName: "text-[11px] uppercase tracking-[0.45em] text-amber-100/80",
+    choicePrompt: "序幕分歧",
+    choiceHelper: "这是玩家第一次介入剧情，选项会决定后续进入哪条片段。",
+    transitionBackground:
+      "bg-[radial-gradient(circle,_rgba(245,158,11,0.18)_0%,_rgba(0,0,0,0.46)_36%,_rgba(0,0,0,0.9)_100%)]",
+    transitionLineClassName: "bg-gradient-to-r from-transparent via-amber-200/70 to-transparent",
+    transitionTextClassName:
+      "mt-4 break-words text-4xl text-amber-50 sm:text-7xl animate-[cinema-rise_900ms_ease-out]",
+  },
+  middle: {
+    stage: "middle",
+    label: "中段",
+    eyebrow: "剧情推进",
+    title: "分支进行中",
+    helper: "持续推进剧情，注意每次选择造成的路径变化。",
+    mainBackground: "min-h-screen bg-[#030405] text-stone-100",
+    ambientBackground:
+      "bg-[radial-gradient(circle_at_top,_rgba(164,31,53,0.24),_transparent_25%),radial-gradient(circle_at_80%_12%,_rgba(245,158,11,0.12),_transparent_18%),linear-gradient(180deg,_#141215_0%,_#08090b_42%,_#030405_100%)]",
+    frameClassName:
+      "relative w-full overflow-hidden rounded-none border-0 bg-black/55 shadow-[0_50px_180px_rgba(0,0,0,0.6)] sm:rounded-[2.6rem] sm:border sm:border-white/10",
+    videoOverlayClassName:
+      "pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,_rgba(0,0,0,0.38)_0%,_rgba(0,0,0,0.04)_22%,_rgba(0,0,0,0.82)_100%)]",
+    vignetteClassName:
+      "pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,_transparent_36%,_rgba(0,0,0,0.38)_100%)]",
+    badgeClassName:
+      "inline-flex rounded-full border border-white/10 bg-black/45 px-3 py-1 text-[11px] uppercase tracking-[0.35em] text-amber-200/80 backdrop-blur",
+    titlePanelClassName:
+      "rounded-[1.4rem] border border-white/10 bg-black/42 px-4 py-3 backdrop-blur-xl",
+    choiceShellClassName:
+      "mb-3 rounded-[1.6rem] border border-white/10 bg-black/58 px-4 py-4 shadow-[0_20px_50px_rgba(0,0,0,0.35)] backdrop-blur-xl sm:mb-4 sm:rounded-[1.8rem] sm:px-5",
+    choiceEyebrowClassName: "text-[11px] uppercase tracking-[0.45em] text-amber-200/75",
+    choicePrompt: "请选择下一步",
+    choiceHelper: "剧情已经停在关键节点，接下来的方向由你决定。",
+    transitionBackground:
+      "bg-[radial-gradient(circle,_rgba(255,255,255,0.14)_0%,_rgba(0,0,0,0.48)_36%,_rgba(0,0,0,0.92)_100%)]",
+    transitionLineClassName: "bg-gradient-to-r from-transparent via-amber-200/70 to-transparent",
+    transitionTextClassName:
+      "mt-4 break-words text-4xl text-stone-50 sm:text-7xl animate-[cinema-rise_900ms_ease-out]",
+  },
+  ending: {
+    stage: "ending",
+    label: "结局",
+    eyebrow: "终局结算",
+    title: "命运落点",
+    helper: "进入结局段，系统会汇总本轮路径和关键选择。",
+    mainBackground: "min-h-screen bg-[#020305] text-stone-100",
+    ambientBackground:
+      "bg-[radial-gradient(circle_at_50%_12%,_rgba(56,189,248,0.22),_transparent_24%),radial-gradient(circle_at_18%_18%,_rgba(244,63,94,0.16),_transparent_22%),linear-gradient(180deg,_#050b12_0%,_#050506_48%,_#010203_100%)]",
+    frameClassName:
+      "relative w-full overflow-hidden rounded-none border-0 bg-black/62 shadow-[0_50px_190px_rgba(14,165,233,0.18)] sm:rounded-[2.8rem] sm:border sm:border-sky-200/12",
+    videoOverlayClassName:
+      "pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,_rgba(3,7,18,0.42)_0%,_rgba(0,0,0,0.04)_24%,_rgba(2,6,23,0.86)_100%)]",
+    vignetteClassName:
+      "pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,_transparent_30%,_rgba(8,47,73,0.2)_68%,_rgba(0,0,0,0.62)_100%)]",
+    badgeClassName:
+      "inline-flex rounded-full border border-sky-200/18 bg-sky-200/10 px-3 py-1 text-[11px] uppercase tracking-[0.35em] text-sky-100 backdrop-blur",
+    titlePanelClassName:
+      "rounded-[1.5rem] border border-sky-200/14 bg-black/45 px-4 py-3 shadow-[0_18px_70px_rgba(56,189,248,0.10)] backdrop-blur-xl",
+    choiceShellClassName:
+      "mb-3 rounded-[1.6rem] border border-sky-200/16 bg-black/64 px-4 py-4 shadow-[0_20px_60px_rgba(56,189,248,0.10)] backdrop-blur-xl sm:mb-4 sm:rounded-[1.8rem] sm:px-5",
+    choiceEyebrowClassName: "text-[11px] uppercase tracking-[0.45em] text-sky-100/80",
+    choicePrompt: "最后抉择",
+    choiceHelper: "这一步会收束当前路线，并决定最终呈现的结局结果。",
+    transitionBackground:
+      "bg-[radial-gradient(circle,_rgba(56,189,248,0.18)_0%,_rgba(0,0,0,0.52)_34%,_rgba(0,0,0,0.94)_100%)]",
+    transitionLineClassName: "bg-gradient-to-r from-transparent via-sky-200/70 to-transparent",
+    transitionTextClassName:
+      "mt-4 break-words text-4xl text-sky-50 sm:text-7xl animate-[cinema-rise_900ms_ease-out]",
+  },
+};
 
 async function requestSession(path: string, init?: RequestInit): Promise<SessionPayload> {
   const response = await fetch(path, {
@@ -403,7 +520,7 @@ function getInfoPanelTitle(tab: "history" | "state" | "actions") {
   return "提示记录";
 }
 
-export function InteractivePlayer() {
+export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
   const searchParams = useSearchParams();
   const previewNodeCode = searchParams.get("previewNode")?.trim() ?? "";
   const [session, setSession] = useState<SessionPayload | null>(null);
@@ -532,7 +649,10 @@ export function InteractivePlayer() {
       try {
         const nextSession = await requestSession("/api/playthroughs", {
           method: "POST",
-          body: previewNodeCode ? JSON.stringify({ startNodeCode: previewNodeCode }) : undefined,
+          body: JSON.stringify({
+            projectSlug,
+            startNodeCode: previewNodeCode || undefined,
+          }),
         });
 
         if (cancelled) {
@@ -558,7 +678,7 @@ export function InteractivePlayer() {
     return () => {
       cancelled = true;
     };
-  }, [previewNodeCode]);
+  }, [previewNodeCode, projectSlug]);
 
   useEffect(() => {
     return () => {
@@ -991,6 +1111,12 @@ export function InteractivePlayer() {
     videoFreezeFrame && (hasEnded || Boolean(runtimeChoices?.pauseVideo)),
   );
   const sceneLabel = getSceneStageLabel(progressStep, currentNode);
+  const sceneStage: SceneStage = currentNode?.isEnding
+    ? "ending"
+    : progressStep <= 1
+      ? "opening"
+      : "middle";
+  const scenePresentation = scenePresentations[sceneStage];
   const endingAccent = currentNode?.endingTone ? toneAccent[currentNode.endingTone] : "";
   const overlayPositionClass =
     runtimeOverlay?.align === "top"
@@ -1008,7 +1134,7 @@ export function InteractivePlayer() {
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(194,65,12,0.18),_transparent_32%),radial-gradient(circle_at_80%_20%,_rgba(234,179,8,0.1),_transparent_22%),linear-gradient(180deg,_#140f10_0%,_#060709_58%,_#030405_100%)]" />
           <div className="relative mx-auto flex min-h-screen w-full max-w-6xl flex-col justify-center px-6 py-12">
             <div className="mx-auto max-w-3xl rounded-[2.5rem] border border-white/10 bg-black/35 p-10 text-center shadow-[0_30px_120px_rgba(0,0,0,0.45)] backdrop-blur-xl">
-              <p className="text-xs uppercase tracking-[0.55em] text-amber-200/70">互动影游</p>
+              <p className="text-xs uppercase tracking-[0.55em] text-amber-200/70">StoryPlay</p>
               <h1 className="mt-5 text-4xl text-stone-50 sm:text-5xl">项目尚未开始</h1>
               <p className="mx-auto mt-5 max-w-2xl text-sm leading-8 text-stone-300 sm:text-base">
                 这个项目还没有起始片段，所以玩家暂时无法进入剧情。先去后台填写基础信息，并创建第一个片段。
@@ -1144,13 +1270,13 @@ export function InteractivePlayer() {
   }
 
   return (
-    <main className="min-h-screen bg-[#030405] text-stone-100">
+    <main className={scenePresentation.mainBackground}>
       <div className="relative isolate min-h-screen overflow-hidden">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(164,31,53,0.24),_transparent_25%),radial-gradient(circle_at_80%_12%,_rgba(245,158,11,0.12),_transparent_18%),linear-gradient(180deg,_#141215_0%,_#08090b_42%,_#030405_100%)]" />
+        <div className={`absolute inset-0 ${scenePresentation.ambientBackground}`} />
         <div className="absolute inset-0 opacity-[0.07] [background-image:linear-gradient(rgba(255,255,255,0.22)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.16)_1px,transparent_1px)] [background-size:30px_30px]" />
 
         <div className="relative mx-auto flex min-h-screen w-full max-w-[1880px] items-center justify-center px-0 py-0 sm:px-4 sm:py-4">
-          <section className="relative w-full overflow-hidden rounded-none border-0 bg-black/55 shadow-[0_50px_180px_rgba(0,0,0,0.6)] sm:rounded-[2.6rem] sm:border sm:border-white/10">
+          <section className={scenePresentation.frameClassName}>
             <div className="relative h-[100svh] w-full bg-black sm:h-[calc(100svh-2rem)] lg:h-[88vh]">
               {currentNode && !videoFailed ? (
                 <>
@@ -1185,16 +1311,19 @@ export function InteractivePlayer() {
                 <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(180,83,9,0.24),_transparent_36%),linear-gradient(180deg,_rgba(17,17,17,0.25)_0%,_rgba(5,5,6,0.85)_100%)]" />
               )}
 
-              <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,_rgba(0,0,0,0.38)_0%,_rgba(0,0,0,0.04)_22%,_rgba(0,0,0,0.82)_100%)]" />
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,_transparent_36%,_rgba(0,0,0,0.38)_100%)]" />
+              <div className={scenePresentation.videoOverlayClassName} />
+              <div className={scenePresentation.vignetteClassName} />
               {choiceReady ? (
                 <div className="pointer-events-none absolute inset-0 z-[15] bg-[radial-gradient(circle_at_center,_rgba(255,255,255,0.04)_0%,_rgba(0,0,0,0.2)_28%,_rgba(0,0,0,0.72)_100%)]" />
               ) : null}
 
               <div className="absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-4 px-4 pt-4 sm:px-6 sm:pt-6">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="inline-flex rounded-full border border-white/10 bg-black/45 px-3 py-1 text-[11px] uppercase tracking-[0.35em] text-amber-200/80 backdrop-blur">
+                  <span className={scenePresentation.badgeClassName}>
                     {isPreviewMode ? "片段试玩" : sceneLabel}
+                  </span>
+                  <span className="hidden rounded-full border border-white/10 bg-black/35 px-3 py-1 text-[11px] uppercase tracking-[0.3em] text-stone-200/78 backdrop-blur sm:inline-flex">
+                    {scenePresentation.eyebrow}
                   </span>
                   {currentNode?.endingTone ? (
                     <span className="inline-flex rounded-full border border-white/10 bg-black/45 px-3 py-1 text-[11px] uppercase tracking-[0.3em] text-stone-200/80 backdrop-blur">
@@ -1230,27 +1359,31 @@ export function InteractivePlayer() {
               </div>
 
               <div className="pointer-events-none absolute left-4 top-20 z-20 max-w-[65vw] sm:left-6 sm:top-24 sm:max-w-none">
-                <div className="rounded-[1.4rem] border border-white/10 bg-black/42 px-4 py-3 backdrop-blur-xl">
-                  <div className="text-[11px] uppercase tracking-[0.38em] text-stone-400">当前片段</div>
+                <div className={scenePresentation.titlePanelClassName}>
+                  <div className="text-[11px] uppercase tracking-[0.38em] text-stone-400">
+                    {scenePresentation.title}
+                  </div>
                   <div className="mt-2 break-words text-lg leading-tight text-stone-50 sm:text-xl">
                     {currentNode?.title ?? "加载中"}
                   </div>
-                    <div className="mt-2 text-xs text-stone-400">已推进到第 {progressStep} 段</div>
+                  <div className="mt-2 max-w-sm text-xs leading-5 text-stone-400">
+                    {scenePresentation.helper}
+                  </div>
                 </div>
               </div>
 
               {transitionVisible ? (
-                <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-[radial-gradient(circle,_rgba(255,255,255,0.14)_0%,_rgba(0,0,0,0.48)_36%,_rgba(0,0,0,0.92)_100%)]">
+                <div className={`pointer-events-none absolute inset-0 z-30 flex items-center justify-center ${scenePresentation.transitionBackground}`}>
                   <div className="absolute inset-0 bg-[linear-gradient(180deg,_rgba(255,255,255,0.06)_0%,_transparent_18%,_rgba(0,0,0,0.42)_100%)]" />
                   <div className="relative px-6 text-center">
-                    <div className="mx-auto h-px w-28 bg-gradient-to-r from-transparent via-amber-200/70 to-transparent" />
+                    <div className={`mx-auto h-px w-28 ${scenePresentation.transitionLineClassName}`} />
                     <div className="mt-5 text-[11px] uppercase tracking-[0.7em] text-amber-200/72">
-                     章节切换
+                      {scenePresentation.eyebrow}
                     </div>
-                    <div className="mt-4 break-words text-4xl text-stone-50 sm:text-7xl animate-[cinema-rise_900ms_ease-out]">
+                    <div className={scenePresentation.transitionTextClassName}>
                       {transitionText}
                     </div>
-                    <div className="mx-auto mt-5 h-px w-28 bg-gradient-to-r from-transparent via-amber-200/70 to-transparent" />
+                    <div className={`mx-auto mt-5 h-px w-28 ${scenePresentation.transitionLineClassName}`} />
                   </div>
                 </div>
               ) : null}
@@ -1318,15 +1451,15 @@ export function InteractivePlayer() {
               {choiceReady && currentNode ? (
                 <div className="absolute inset-x-0 bottom-0 z-20 px-3 pb-3 sm:px-6 sm:pb-6">
                   <div className="mx-auto max-w-6xl">
-                    <div className="mb-3 rounded-[1.6rem] border border-white/10 bg-black/58 px-4 py-4 shadow-[0_20px_50px_rgba(0,0,0,0.35)] backdrop-blur-xl sm:mb-4 sm:rounded-[1.8rem] sm:px-5">
-                      <div className="text-[11px] uppercase tracking-[0.45em] text-amber-200/75">
-                        请选择下一步
+                    <div className={scenePresentation.choiceShellClassName}>
+                      <div className={scenePresentation.choiceEyebrowClassName}>
+                        {scenePresentation.choicePrompt}
                       </div>
                       <div className="mt-2 break-words text-xl text-stone-50 sm:text-2xl">
-                        {runtimeChoices?.title || "做出你的下一步选择"}
+                        {runtimeChoices?.title || currentNode.title || "做出你的下一步选择"}
                       </div>
                       <p className="mt-2 text-sm leading-7 text-stone-300">
-                        {runtimeChoices?.body || "剧情已经停在关键节点，接下来的方向由你决定。"}
+                        {runtimeChoices?.body || scenePresentation.choiceHelper}
                       </p>
                     </div>
 
@@ -1459,8 +1592,10 @@ export function InteractivePlayer() {
               {!choiceReady && !(hasEnded && currentNode?.isEnding) ? (
                 <div className="absolute inset-x-0 bottom-0 z-10 px-4 pb-20 sm:px-6 sm:pb-24">
                   <div className="max-w-3xl">
-                    <div className="rounded-[1.5rem] border border-white/10 bg-black/42 px-4 py-3 backdrop-blur-xl">
-                      <div className="text-[11px] uppercase tracking-[0.35em] text-stone-500">当前片段</div>
+                    <div className={scenePresentation.titlePanelClassName}>
+                      <div className="text-[11px] uppercase tracking-[0.35em] text-stone-500">
+                        {scenePresentation.label}
+                      </div>
                       <div className="mt-2 break-words text-lg leading-tight text-stone-100">
                         {currentNode?.title ?? "加载中"}
                       </div>

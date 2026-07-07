@@ -1,7 +1,9 @@
 "use client";
 
-import { useMemo, useState, type ChangeEvent, type ReactNode } from "react";
-import { BranchGraph } from "@/components/branch-graph";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { BranchGraph, type BranchGraphFilter } from "@/components/branch-graph";
 import type {
   ConditionOperator,
   ConditionRule,
@@ -11,6 +13,7 @@ import type {
   StoryNode,
   TimelineEvent,
   TimelineEventType,
+  ProjectSummary,
   VariableAction,
   VariableActionType,
   VariableDefinition,
@@ -20,6 +23,7 @@ import type {
 
 type AdminPayload = {
   game: StoryGame;
+  projects?: ProjectSummary[];
 };
 
 type UploadPayload = {
@@ -29,9 +33,9 @@ type UploadPayload = {
   contentType: string | null;
 };
 
-type WorkspaceTab = "project" | "assets" | "flow" | "scene" | "choices";
+type WorkspaceTab = "project" | "flow";
 
-type NodeListFilter = "all" | "issues" | "start" | "ending";
+type NodeListFilter = "all" | "issues" | "start" | "ending" | "isolated";
 type NodeNavigationMode = "flat" | "chapter";
 
 type DraftVariable = {
@@ -98,11 +102,24 @@ type NewChoiceForm = {
   label: string;
   hint: string;
   targetNodeCode: string;
+  targetNodeTitle: string;
+};
+
+type QuickLinkForm = {
+  title: string;
+  code: string;
+  nodeType: "video" | "ending";
+  linkMode: "auto" | "choice";
+  choiceLabel: string;
+  choiceHint: string;
 };
 
 type GameFormState = {
   title: string;
+  slug: string;
   tagline: string;
+  listedOnHome: boolean;
+  sortOrder: string;
   intro: string;
   promoVideoUrl: string;
   promoPosterUrl: string;
@@ -113,18 +130,8 @@ type GameFormState = {
 
 type AdminStoryEditorProps = {
   initialGame: StoryGame;
+  projects: ProjectSummary[];
 };
-
-type ResourceItem = {
-  id: string;
-  label: string;
-  kind: "promo-video" | "promo-poster" | "node-video";
-  url: string;
-  relatedNodeCode?: string;
-};
-
-const defaultVideoUrl =
-  "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4";
 
 const workspaceTabs: Array<{
   id: WorkspaceTab;
@@ -135,38 +142,17 @@ const workspaceTabs: Array<{
 }> = [
   {
     id: "project",
-    label: "项目配置",
+    label: "项目",
     step: "Step 1",
-    hint: "先把作品标题、入口页、起始片段和全局变量定下来。",
-    description: "定义作品是什么，以及玩家点开始前会看到什么。",
+    hint: "先定作品信息、入口内容和全局变量。",
+    description: "这里处理作品基础配置。",
   },
   {
     id: "flow",
-    label: "搭建剧情",
+    label: "剧情",
     step: "Step 2",
-    hint: "先创建片段，再把片段之间的关系连起来。",
-    description: "创建首个片段、扩展分支、检查剧情结构。",
-  },
-  {
-    id: "scene",
-    label: "编辑片段",
-    step: "Step 3",
-    hint: "选中一个片段后，在这里写内容、挂视频、加时间线事件。",
-    description: "把单个片段本身做完整。",
-  },
-  {
-    id: "choices",
-    label: "设置出口",
-    step: "Step 4",
-    hint: "给片段结尾配置玩家可选出口，以及条件和动作。",
-    description: "决定这一段播完后，玩家能去哪里。",
-  },
-  {
-    id: "assets",
-    label: "素材与发布",
-    step: "Step 5",
-    hint: "统一检查宣传素材、片段视频和发布前结构风险。",
-    description: "最后集中处理素材与上线前自检。",
+    hint: "先创建片段，再连结构、查问题。",
+    description: "这里处理片段目录和剧情结构。",
   },
 ];
 
@@ -179,6 +165,36 @@ const endingToneLabel: Record<EndingTone, string> = {
 const nodeTypeLabel: Record<"video" | "ending", string> = {
   video: "视频片段",
   ending: "结局片段",
+};
+
+type PlayerSceneStage = "opening" | "middle" | "ending";
+
+type PlayerScenePresentation = {
+  stage: PlayerSceneStage;
+  label: string;
+  detail: string;
+  badgeClassName: string;
+};
+
+const playerScenePresentation: Record<PlayerSceneStage, PlayerScenePresentation> = {
+  opening: {
+    stage: "opening",
+    label: "开场 UI",
+    detail: "玩家点击开始后进入的第一段，会使用更强的片头氛围和引导文案。",
+    badgeClassName: "bg-amber-100 text-amber-800",
+  },
+  middle: {
+    stage: "middle",
+    label: "中段 UI",
+    detail: "普通剧情推进段，重点展示当前片段和分支选择。",
+    badgeClassName: "bg-stone-200 text-stone-700",
+  },
+  ending: {
+    stage: "ending",
+    label: "结局 UI",
+    detail: "结局片段会使用终局展示和结算摘要。",
+    badgeClassName: "bg-sky-100 text-sky-800",
+  },
 };
 
 const timelineEventTypeOptions: Array<{ value: TimelineEventType; label: string }> = [
@@ -231,6 +247,18 @@ function pickNode(game: StoryGame, preferredNodeCode?: string) {
 function getNodeDisplayName(game: StoryGame, nodeCode: string) {
   const node = game.nodes.find((entry) => entry.code === nodeCode);
   return node ? `${node.title} / ${node.code}` : `${nodeCode}（未找到）`;
+}
+
+function getPlayerScenePresentation(node: StoryNode, game: StoryGame) {
+  if (node.isEnding) {
+    return playerScenePresentation.ending;
+  }
+
+  if (node.code === game.startNodeCode) {
+    return playerScenePresentation.opening;
+  }
+
+  return playerScenePresentation.middle;
 }
 
 function getNodeChapterLabel(node: StoryNode) {
@@ -299,6 +327,17 @@ async function requestAdmin<T extends object>(path: string, init?: RequestInit):
   }
 
   return payload;
+}
+
+function withProjectQuery(path: string, projectSlug: string) {
+  const value = projectSlug.trim();
+
+  if (!value) {
+    return path;
+  }
+
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}project=${encodeURIComponent(value)}`;
 }
 
 function toDraftVariables(variables: VariableDefinition[] | undefined): DraftVariable[] {
@@ -647,13 +686,33 @@ function toDraftNode(node: StoryNode): DraftNode {
 function buildGameForm(game: StoryGame): GameFormState {
   return {
     title: game.title,
+    slug: game.slug,
     tagline: game.tagline,
+    listedOnHome: game.listedOnHome,
+    sortOrder: String(game.sortOrder ?? 0),
     intro: game.intro,
     promoVideoUrl: game.promoVideoUrl,
     promoPosterUrl: game.promoPosterUrl,
     promoText: game.promoText,
     startNodeCode: game.startNodeCode,
     variables: toDraftVariables(game.variables),
+  };
+}
+
+function buildNodeSavePayload(draftNode: DraftNode, variables: DraftVariable[]) {
+  return {
+    ...draftNode,
+    autoNextNodeCode: draftNode.nodeType === "ending" ? null : draftNode.autoNextNodeCode || null,
+    endingTone: draftNode.nodeType === "ending" ? draftNode.endingTone : null,
+    choices: draftNode.choices.map((choice, index) => ({
+      code: choice.code.trim() || `choice_${index + 1}`,
+      label: choice.label.trim(),
+      hint: choice.hint.trim(),
+      targetNodeCode: choice.targetNodeCode.trim(),
+      conditions: toConditionPayload(toDraftConditions(choice.conditions), variables),
+      actions: toActionPayload(toDraftActions(choice.actions), variables),
+    })),
+    timelineEvents: toTimelinePayload(draftNode.timelineEvents, variables),
   };
 }
 
@@ -707,7 +766,7 @@ function Panel({
     <section className="rounded-[1.75rem] border border-stone-900/10 bg-white/80 p-5 shadow-[0_18px_60px_rgba(52,38,25,0.06)]">
       <div>
         <p className="text-[11px] uppercase tracking-[0.35em] text-stone-500">{eyebrow}</p>
-        <h2 className="mt-3 text-2xl text-stone-950">{title}</h2>
+        <h2 className="mt-3 text-xl leading-snug text-stone-950 sm:text-[1.7rem]">{title}</h2>
         <p className="mt-2 text-sm leading-7 text-stone-700">{description}</p>
       </div>
       <div className="mt-5">{children}</div>
@@ -750,9 +809,11 @@ function HelperCard({
   );
 }
 
-export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
+export function AdminStoryEditor({ initialGame, projects: initialProjects }: AdminStoryEditorProps) {
+  const router = useRouter();
   const initialNode = pickNode(initialGame);
   const [game, setGame] = useState<StoryGame>(initialGame);
+  const [projects, setProjects] = useState<ProjectSummary[]>(initialProjects);
   const [selectedNodeCode, setSelectedNodeCode] = useState<string>(initialNode?.code ?? "");
   const [draftNode, setDraftNode] = useState<DraftNode | null>(
     initialNode ? toDraftNode(initialNode) : null,
@@ -765,18 +826,30 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
     code: "",
     title: "",
     nodeType: "video",
-    videoUrl: defaultVideoUrl,
+    videoUrl: "",
   });
   const [newChoiceForm, setNewChoiceForm] = useState<NewChoiceForm>({
     code: "",
     label: "",
     hint: "",
-    targetNodeCode: initialGame.nodes[0]?.code ?? "",
+    targetNodeCode: "",
+    targetNodeTitle: "",
+  });
+  const [quickLinkForm, setQuickLinkForm] = useState<QuickLinkForm>({
+    title: "",
+    code: "",
+    nodeType: "video",
+    linkMode: "choice",
+    choiceLabel: "",
+    choiceHint: "",
   });
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [deletingProject, setDeletingProject] = useState(false);
   const [uploadingPromo, setUploadingPromo] = useState(false);
+  const [uploadingPromoPoster, setUploadingPromoPoster] = useState(false);
   const [uploadingNode, setUploadingNode] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -784,14 +857,16 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
   const [collapsedTimelineEventIds, setCollapsedTimelineEventIds] = useState<string[]>([]);
   const [nodeSearch, setNodeSearch] = useState("");
   const [nodeFilter, setNodeFilter] = useState<NodeListFilter>("all");
+  const [branchGraphFilter, setBranchGraphFilter] = useState<BranchGraphFilter>("all");
   const [nodeNavigationMode, setNodeNavigationMode] = useState<NodeNavigationMode>("flat");
   const [draggingTimelineEventId, setDraggingTimelineEventId] = useState<string | null>(null);
 
   const className = inputClassName();
   const textareaClass = textareaClassName();
+  const currentProjectSlug = game.slug;
   const selectedNode = game.nodes.find((node) => node.code === selectedNodeCode) ?? null;
   const hasNodes = game.nodes.length > 0;
-  const activeWorkspace = workspaceTabs.find((tab) => tab.id === activeTab) ?? workspaceTabs[0];
+  const activeWorkspace = activeTab === "project" ? workspaceTabs[0] : workspaceTabs[1];
   const projectBaselineSnapshot = useMemo(() => JSON.stringify(buildGameForm(game)), [game]);
   const projectDraftSnapshot = useMemo(() => JSON.stringify(gameForm), [gameForm]);
   const projectDirty = projectBaselineSnapshot !== projectDraftSnapshot;
@@ -803,11 +878,30 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
     () => (draftNode ? JSON.stringify(draftNode) : null),
     [draftNode],
   );
-  const sceneDirty = Boolean(
+  const flowComposerRef = useRef<HTMLDivElement | null>(null);
+  const quickLinkComposerRef = useRef<HTMLDivElement | null>(null);
+  const nodeDirty = Boolean(
     selectedNode && draftNode && selectedNodeBaselineSnapshot !== selectedNodeDraftSnapshot,
   );
   const nodeListEntries = useMemo(() => {
     const nodeCodeSet = new Set(game.nodes.map((node) => node.code));
+    const incoming = new Map<string, number>();
+
+    for (const node of game.nodes) {
+      incoming.set(node.code, 0);
+    }
+
+    for (const node of game.nodes) {
+      if (node.autoNextNodeCode && nodeCodeSet.has(node.autoNextNodeCode)) {
+        incoming.set(node.autoNextNodeCode, (incoming.get(node.autoNextNodeCode) ?? 0) + 1);
+      }
+
+      for (const choice of node.choices ?? []) {
+        if (nodeCodeSet.has(choice.targetNodeCode)) {
+          incoming.set(choice.targetNodeCode, (incoming.get(choice.targetNodeCode) ?? 0) + 1);
+        }
+      }
+    }
 
     return game.nodes.map((node) => {
       const invalidChoiceTargets = (node.choices ?? []).filter(
@@ -815,13 +909,17 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
       ).length;
       const invalidAutoTarget =
         node.autoNextNodeCode && !nodeCodeSet.has(node.autoNextNodeCode) ? 1 : 0;
+      const isStart = node.code === game.startNodeCode;
+      const isEnding = Boolean(node.isEnding);
+      const incomingCount = incoming.get(node.code) ?? 0;
+      const isIsolated = !isStart && !isEnding && incomingCount === 0;
       const issues: string[] = [];
 
       if (!node.videoUrl.trim()) {
         issues.push("缺视频");
       }
 
-      if (!node.isEnding && !(node.choices?.length ?? 0) && !node.autoNextNodeCode) {
+      if (!isEnding && !(node.choices?.length ?? 0) && !node.autoNextNodeCode) {
         issues.push("缺出口");
       }
 
@@ -829,10 +927,17 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
         issues.push("目标无效");
       }
 
+      if (isIsolated) {
+        issues.push("孤立片段");
+      }
+
       return {
         node,
-        isStart: node.code === game.startNodeCode,
-        isEnding: Boolean(node.isEnding),
+        isStart,
+        isEnding,
+        isIsolated,
+        incomingCount,
+        playerScene: getPlayerScenePresentation(node, game),
         issues,
         issueCount: issues.length,
       };
@@ -863,6 +968,10 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
         return entry.isEnding;
       }
 
+      if (nodeFilter === "isolated") {
+        return entry.isIsolated;
+      }
+
       return true;
     });
   }, [nodeFilter, nodeListEntries, nodeSearch]);
@@ -889,21 +998,46 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
       entries,
     }));
   }, [filteredNodeEntries]);
-  const currentNodeEntry = useMemo(
-    () => nodeListEntries.find((entry) => entry.node.code === selectedNodeCode) ?? null,
-    [nodeListEntries, selectedNodeCode],
+  const orderedProjects = useMemo(
+    () =>
+      [...projects].sort((left, right) => {
+        if (left.sortOrder !== right.sortOrder) {
+          return right.sortOrder - left.sortOrder;
+        }
+
+        return right.updatedAt.localeCompare(left.updatedAt);
+      }),
+    [projects],
   );
   const issueNodeEntries = useMemo(
     () => nodeListEntries.filter((entry) => entry.issueCount > 0),
     [nodeListEntries],
   );
-  const hasUnsavedActiveChanges =
-    activeTab === "project" ? projectDirty : activeTab === "scene" || activeTab === "choices" ? sceneDirty : false;
+  const selectedNodeEntry = useMemo(
+    () => nodeListEntries.find((entry) => entry.node.code === selectedNodeCode) ?? null,
+    [nodeListEntries, selectedNodeCode],
+  );
+  const hasUnsavedActiveChanges = activeTab === "project" ? projectDirty : nodeDirty;
 
   function syncFromGame(nextGame: StoryGame, preferredNodeCode?: string) {
     const nextNode = pickNode(nextGame, preferredNodeCode ?? selectedNodeCode);
 
     setGame(nextGame);
+    setProjects((current) => {
+      const nextSummary: ProjectSummary = {
+        id: nextGame.id,
+        slug: nextGame.slug,
+        title: nextGame.title,
+        tagline: nextGame.tagline,
+        listedOnHome: nextGame.listedOnHome,
+        sortOrder: nextGame.sortOrder ?? 0,
+        promoVideoUrl: nextGame.promoVideoUrl,
+        promoPosterUrl: nextGame.promoPosterUrl,
+        updatedAt: new Date().toISOString(),
+      };
+      const filtered = current.filter((item) => item.slug !== nextGame.slug);
+      return [nextSummary, ...filtered];
+    });
     setGameForm(buildGameForm(nextGame));
     setSelectedNodeCode(nextNode?.code ?? "");
     setDraftNode(nextNode ? toDraftNode(nextNode) : null);
@@ -914,7 +1048,7 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
       targetNodeCode:
         current.targetNodeCode && nextGame.nodes.some((node) => node.code === current.targetNodeCode)
           ? current.targetNodeCode
-          : nextGame.nodes[0]?.code ?? "",
+          : "",
     }));
 
     if (!nextGame.nodes.length) {
@@ -931,8 +1065,8 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
     setStatus(null);
     setError(null);
 
-    if (activeTab === "project" || activeTab === "assets" || activeTab === "flow") {
-      setActiveTab("scene");
+    if (activeTab === "project") {
+      setActiveTab("flow");
     }
   }
 
@@ -950,13 +1084,45 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
     }
   }
 
+  function openFlowComposer() {
+    setActiveTab("flow");
+    queueMicrotask(() => {
+      flowComposerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
+  function prepareLinkedNodeFromGraph(nodeCode: string, linkMode: QuickLinkForm["linkMode"]) {
+    const node = game.nodes.find((entry) => entry.code === nodeCode);
+
+    if (!node || node.isEnding) {
+      return;
+    }
+
+    focusNode(nodeCode, "flow");
+    setQuickLinkForm((current) => ({
+      ...current,
+      title: node.title ? `${node.title} / 下一幕` : "",
+      code: "",
+      nodeType: "video",
+      linkMode,
+      choiceLabel: linkMode === "choice" ? "继续" : current.choiceLabel,
+      choiceHint: "",
+    }));
+    queueMicrotask(() => {
+      quickLinkComposerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }
+
   async function loadGame(preferredNodeCode?: string) {
     setLoading(true);
     setError(null);
 
     try {
-      const payload = await requestAdmin<AdminPayload>("/api/admin/game");
+      const payload = await requestAdmin<AdminPayload>(withProjectQuery("/api/admin/game", currentProjectSlug));
       syncFromGame(payload.game, preferredNodeCode);
+      if (payload.projects) {
+        setProjects(payload.projects);
+      }
       setStatus("已刷新后台数据");
     } catch (loadGameError) {
       setError(loadErrorMessage(loadGameError, "加载项目失败"));
@@ -971,10 +1137,11 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
     setError(null);
 
     try {
-      const payload = await requestAdmin<AdminPayload>("/api/admin/game", {
+      const payload = await requestAdmin<AdminPayload>(withProjectQuery("/api/admin/game", currentProjectSlug), {
         method: "PATCH",
         body: JSON.stringify({
           ...gameForm,
+          sortOrder: Number(gameForm.sortOrder || 0),
           intro: gameForm.intro,
           promoText: gameForm.promoText || gameForm.intro,
           variables: toVariablePayload(gameForm.variables),
@@ -982,6 +1149,9 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
       });
 
       syncFromGame(payload.game, selectedNodeCode);
+      if (payload.projects) {
+        setProjects(payload.projects);
+      }
       setStatus("已保存项目配置");
     } catch (saveGameError) {
       setError(loadErrorMessage(saveGameError, "保存项目配置失败"));
@@ -996,7 +1166,7 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
     setError(null);
 
     try {
-      const payload = await requestAdmin<AdminPayload>("/api/admin/game", {
+      const payload = await requestAdmin<AdminPayload>(withProjectQuery("/api/admin/game", currentProjectSlug), {
         method: "PATCH",
         body: JSON.stringify({
           startNodeCode: nodeCode,
@@ -1004,6 +1174,9 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
       });
 
       syncFromGame(payload.game, nodeCode);
+      if (payload.projects) {
+        setProjects(payload.projects);
+      }
       setStatus(`已设为起始片段：${getNodeDisplayName(payload.game, nodeCode)}`);
     } catch (setStartError) {
       setError(loadErrorMessage(setStartError, "设置起始片段失败"));
@@ -1018,7 +1191,7 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
     setError(null);
 
     try {
-      const payload = await requestAdmin<AdminPayload>("/api/admin/game", {
+      const payload = await requestAdmin<AdminPayload>(withProjectQuery("/api/admin/game", currentProjectSlug), {
         method: "POST",
         body: JSON.stringify({
           action: "reset_blank",
@@ -1026,6 +1199,9 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
       });
 
       syncFromGame(payload.game);
+      if (payload.projects) {
+        setProjects(payload.projects);
+      }
       setActiveTab("project");
       setStatus("已重置为空白项目");
     } catch (resetError) {
@@ -1035,12 +1211,87 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
     }
   }
 
+  async function createProjectEntry() {
+    setCreatingProject(true);
+    setStatus(null);
+    setError(null);
+
+    try {
+      const payload = await requestAdmin<AdminPayload>("/api/admin/game", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "create_project",
+          title: "未命名 StoryPlay 项目",
+        }),
+      });
+
+      if (payload.projects) {
+        setProjects(payload.projects);
+      }
+
+      syncFromGame(payload.game);
+      setActiveTab("project");
+      router.push(`/admin?project=${encodeURIComponent(payload.game.slug)}`);
+      setStatus(`已创建项目：${payload.game.title}`);
+    } catch (createProjectError) {
+      setError(loadErrorMessage(createProjectError, "创建项目失败"));
+    } finally {
+      setCreatingProject(false);
+    }
+  }
+
+  function switchProject(projectSlug: string) {
+    if (!projectSlug || projectSlug === currentProjectSlug) {
+      return;
+    }
+
+    router.push(`/admin?project=${encodeURIComponent(projectSlug)}`);
+  }
+
+  async function deleteCurrentProject() {
+    if (projects.length <= 1) {
+      setError("至少保留一个项目后才能删除当前项目");
+      return;
+    }
+
+    const confirmed = window.confirm(`确定删除项目“${game.title || game.slug}”吗？该项目的剧情与试玩记录会一起移除。`);
+
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingProject(true);
+    setStatus(null);
+    setError(null);
+
+    try {
+      const payload = await requestAdmin<AdminPayload>(withProjectQuery("/api/admin/game", currentProjectSlug), {
+        method: "POST",
+        body: JSON.stringify({
+          action: "delete_project",
+        }),
+      });
+
+      if (payload.projects) {
+        setProjects(payload.projects);
+      }
+
+      syncFromGame(payload.game);
+      router.push(`/admin?project=${encodeURIComponent(payload.game.slug)}`);
+      setStatus(`已删除项目，当前切换到：${payload.game.title}`);
+    } catch (deleteProjectError) {
+      setError(loadErrorMessage(deleteProjectError, "删除项目失败"));
+    } finally {
+      setDeletingProject(false);
+    }
+  }
+
   async function exportProject() {
     setStatus(null);
     setError(null);
 
     try {
-      const response = await fetch("/api/admin/export", {
+      const response = await fetch(withProjectQuery("/api/admin/export", currentProjectSlug), {
         method: "GET",
         cache: "no-store",
       });
@@ -1054,7 +1305,7 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
       const url = window.URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `storyplay-export-${Date.now()}.json`;
+      anchor.download = `StoryPlay-export-${Date.now()}.json`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -1085,12 +1336,15 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
         throw new Error("导入文件缺少 game 数据");
       }
 
-      const payload = await requestAdmin<AdminPayload>("/api/admin/import", {
+      const payload = await requestAdmin<AdminPayload>(withProjectQuery("/api/admin/import", currentProjectSlug), {
         method: "POST",
         body: JSON.stringify({ game: nextGame }),
       });
 
       syncFromGame(payload.game);
+      if (payload.projects) {
+        setProjects(payload.projects);
+      }
       setStatus("已导入项目数据");
     } catch (importError) {
       setError(loadErrorMessage(importError, "导入项目失败"));
@@ -1134,12 +1388,36 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
     try {
       const payload = await uploadAsset(file, "promo");
       setGameForm((current) => ({ ...current, promoVideoUrl: payload.url }));
-      setActiveTab("assets");
+      setActiveTab("project");
       setStatus("宣传视频已上传，保存项目后生效");
     } catch (uploadError) {
       setError(loadErrorMessage(uploadError, "上传宣传视频失败"));
     } finally {
       setUploadingPromo(false);
+      event.target.value = "";
+    }
+  }
+
+  async function uploadPromoPoster(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    setUploadingPromoPoster(true);
+    setStatus(null);
+    setError(null);
+
+    try {
+      const payload = await uploadAsset(file, "promo");
+      setGameForm((current) => ({ ...current, promoPosterUrl: payload.url }));
+      setActiveTab("project");
+      setStatus("入口封面已上传，保存项目后生效");
+    } catch (uploadError) {
+      setError(loadErrorMessage(uploadError, "上传入口封面失败"));
+    } finally {
+      setUploadingPromoPoster(false);
       event.target.value = "";
     }
   }
@@ -1177,17 +1455,14 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
       return;
     }
 
-    if (!trimmedVideoUrl) {
-      setError("请先填写视频地址");
-      return;
-    }
-
     setSaving(true);
     setStatus(null);
     setError(null);
 
     try {
-      const payload = await requestAdmin<{ game: StoryGame; node: StoryNode }>("/api/admin/nodes", {
+      const payload = await requestAdmin<{ game: StoryGame; node: StoryNode }>(
+        withProjectQuery("/api/admin/nodes", currentProjectSlug),
+        {
         method: "POST",
         body: JSON.stringify({
           ...newNodeForm,
@@ -1204,9 +1479,9 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
         code: "",
         title: "",
         nodeType: "video",
-        videoUrl: defaultVideoUrl,
+        videoUrl: "",
       });
-      setActiveTab("scene");
+      setActiveTab("flow");
       setStatus(`已创建片段：${payload.node.title}`);
     } catch (createNodeError) {
       setError(loadErrorMessage(createNodeError, "创建片段失败"));
@@ -1227,7 +1502,9 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
     try {
       const duplicatedTitle = `${draftNode.title || selectedNode.title}（副本）`;
       const duplicatedCode = buildNodeCode(`${selectedNode.code}_copy`);
-      const payload = await requestAdmin<{ game: StoryGame; node: StoryNode }>("/api/admin/nodes", {
+      const payload = await requestAdmin<{ game: StoryGame; node: StoryNode }>(
+        withProjectQuery("/api/admin/nodes", currentProjectSlug),
+        {
         method: "POST",
         body: JSON.stringify({
           code: duplicatedCode,
@@ -1241,27 +1518,19 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
         }),
       });
 
-      await requestAdmin<{ game: StoryGame; node: StoryNode }>(`/api/admin/nodes/${payload.node.code}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          ...draftNode,
-          title: duplicatedTitle,
-          autoNextNodeCode: draftNode.nodeType === "ending" ? null : draftNode.autoNextNodeCode || null,
-          endingTone: draftNode.nodeType === "ending" ? draftNode.endingTone : null,
-          choices: draftNode.choices.map((choice, index) => ({
-            code: choice.code.trim() || `choice_${index + 1}`,
-            label: choice.label.trim(),
-            hint: choice.hint.trim(),
-            targetNodeCode: choice.targetNodeCode.trim(),
-            conditions: toConditionPayload(toDraftConditions(choice.conditions), gameForm.variables),
-            actions: toActionPayload(toDraftActions(choice.actions), gameForm.variables),
-          })),
-          timelineEvents: toTimelinePayload(draftNode.timelineEvents, gameForm.variables),
-        }),
-      });
+      await requestAdmin<{ game: StoryGame; node: StoryNode }>(
+        withProjectQuery(`/api/admin/nodes/${payload.node.code}`, currentProjectSlug),
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            ...buildNodeSavePayload(draftNode, gameForm.variables),
+            title: duplicatedTitle,
+          }),
+        },
+      );
 
       await loadGame(payload.node.code);
-      setActiveTab("scene");
+      setActiveTab("flow");
       setStatus(`已复制片段：${duplicatedTitle}`);
     } catch (duplicateError) {
       setError(loadErrorMessage(duplicateError, "复制片段失败"));
@@ -1288,9 +1557,12 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
     setError(null);
 
     try {
-      const payload = await requestAdmin<AdminPayload>(`/api/admin/nodes/${selectedNode.code}`, {
-        method: "DELETE",
-      });
+      const payload = await requestAdmin<AdminPayload>(
+        withProjectQuery(`/api/admin/nodes/${selectedNode.code}`, currentProjectSlug),
+        {
+          method: "DELETE",
+        },
+      );
 
       syncFromGame(payload.game);
       setActiveTab(payload.game.nodes.length ? "flow" : "project");
@@ -1302,13 +1574,17 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
     }
   }
 
-  function openPreviewFromSelectedNode() {
-    const previewNodeCode = selectedNodeCode || game.startNodeCode;
+  function openPreviewNode(nodeCode?: string) {
+    const previewNodeCode = nodeCode || selectedNodeCode || game.startNodeCode;
     const targetUrl = previewNodeCode
-      ? `/?previewNode=${encodeURIComponent(previewNodeCode)}`
-      : "/";
+      ? `/projects/${encodeURIComponent(currentProjectSlug)}?previewNode=${encodeURIComponent(previewNodeCode)}`
+      : `/projects/${encodeURIComponent(currentProjectSlug)}`;
 
     window.open(targetUrl, "_blank", "noopener,noreferrer");
+  }
+
+  function openPreviewFromSelectedNode() {
+    openPreviewNode();
   }
 
   async function saveNode() {
@@ -1321,26 +1597,11 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
     setError(null);
 
     try {
-      const choicePayload = draftNode.choices.map((choice, index) => ({
-        code: choice.code.trim() || `choice_${index + 1}`,
-        label: choice.label.trim(),
-        hint: choice.hint.trim(),
-        targetNodeCode: choice.targetNodeCode.trim(),
-        conditions: toConditionPayload(toDraftConditions(choice.conditions), gameForm.variables),
-        actions: toActionPayload(toDraftActions(choice.actions), gameForm.variables),
-      }));
-
       const payload = await requestAdmin<{ game: StoryGame; node: StoryNode }>(
-        `/api/admin/nodes/${selectedNodeCode}`,
+        withProjectQuery(`/api/admin/nodes/${selectedNodeCode}`, currentProjectSlug),
         {
           method: "PATCH",
-          body: JSON.stringify({
-            ...draftNode,
-            autoNextNodeCode: draftNode.nodeType === "ending" ? null : draftNode.autoNextNodeCode || null,
-            endingTone: draftNode.nodeType === "ending" ? draftNode.endingTone : null,
-            choices: choicePayload,
-            timelineEvents: toTimelinePayload(draftNode.timelineEvents, gameForm.variables),
-          }),
+          body: JSON.stringify(buildNodeSavePayload(draftNode, gameForm.variables)),
         },
       );
 
@@ -1348,6 +1609,178 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
       setStatus(`已保存片段：${payload.node.title}`);
     } catch (saveNodeError) {
       setError(loadErrorMessage(saveNodeError, "保存片段失败"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function createLinkedNodeFromSelected() {
+    if (!selectedNode || !selectedNodeCode || !draftNode) {
+      return;
+    }
+
+    const trimmedTitle = quickLinkForm.title.trim();
+    const trimmedCode = quickLinkForm.code.trim() || buildNodeCode(trimmedTitle);
+    const trimmedChoiceLabel = quickLinkForm.choiceLabel.trim();
+
+    if (!trimmedTitle) {
+      setError("请先填写新片段标题");
+      return;
+    }
+
+    if (quickLinkForm.linkMode === "choice" && !trimmedChoiceLabel) {
+      setError("创建分支时需要填写选项文案");
+      return;
+    }
+
+    setSaving(true);
+    setStatus(null);
+    setError(null);
+
+    try {
+      const created = await requestAdmin<{ game: StoryGame; node: StoryNode }>(
+        withProjectQuery("/api/admin/nodes", currentProjectSlug),
+        {
+          method: "POST",
+          body: JSON.stringify({
+            code: trimmedCode,
+            title: trimmedTitle,
+            description: "",
+            transcript: "",
+            videoUrl: "",
+            nodeType: quickLinkForm.nodeType,
+            autoNextNodeCode: null,
+            endingTone: quickLinkForm.nodeType === "ending" ? "truth" : null,
+          }),
+        },
+      );
+
+      const linkedDraft: DraftNode = {
+        ...draftNode,
+        autoNextNodeCode:
+          quickLinkForm.linkMode === "auto" && draftNode.nodeType === "video"
+            ? created.node.code
+            : draftNode.autoNextNodeCode,
+        choices:
+          quickLinkForm.linkMode === "choice"
+            ? [
+                ...draftNode.choices,
+                {
+                  code: buildId("choice"),
+                  label: trimmedChoiceLabel,
+                  hint: quickLinkForm.choiceHint.trim(),
+                  targetNodeCode: created.node.code,
+                  conditions: [],
+                  actions: [],
+                },
+              ]
+            : draftNode.choices,
+      };
+
+      await requestAdmin<{ game: StoryGame; node: StoryNode }>(
+        withProjectQuery(`/api/admin/nodes/${selectedNodeCode}`, currentProjectSlug),
+        {
+          method: "PATCH",
+          body: JSON.stringify(buildNodeSavePayload(linkedDraft, gameForm.variables)),
+        },
+      );
+
+      await loadGame(created.node.code);
+      setQuickLinkForm({
+        title: "",
+        code: "",
+        nodeType: "video",
+        linkMode: "choice",
+        choiceLabel: "",
+        choiceHint: "",
+      });
+      setStatus(`已创建并连接片段：${created.node.title}`);
+    } catch (createLinkedError) {
+      setError(loadErrorMessage(createLinkedError, "创建并连接片段失败"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function addChoiceToSelectedNode() {
+    if (!draftNode || !selectedNodeCode) {
+      return;
+    }
+
+    const label = newChoiceForm.label.trim();
+    const targetNodeTitle = newChoiceForm.targetNodeTitle.trim();
+    let targetNodeCode = newChoiceForm.targetNodeCode.trim();
+
+    if (!label) {
+      setError("新增选项需要填写选项文案");
+      return;
+    }
+
+    if (!targetNodeCode && !targetNodeTitle) {
+      setError("请选择已有目标片段，或填写新目标片段标题");
+      return;
+    }
+
+    setSaving(true);
+    setStatus(null);
+    setError(null);
+
+    try {
+      if (!targetNodeCode && targetNodeTitle) {
+        const created = await requestAdmin<{ game: StoryGame; node: StoryNode }>(
+          withProjectQuery("/api/admin/nodes", currentProjectSlug),
+          {
+            method: "POST",
+            body: JSON.stringify({
+              code: buildNodeCode(targetNodeTitle),
+              title: targetNodeTitle,
+              description: "",
+              transcript: "",
+              videoUrl: "",
+              nodeType: "video",
+              autoNextNodeCode: null,
+              endingTone: null,
+            }),
+          },
+        );
+
+        targetNodeCode = created.node.code;
+      }
+
+      const nextDraft: DraftNode = {
+        ...draftNode,
+        choices: [
+          ...draftNode.choices,
+          {
+            code: newChoiceForm.code.trim() || buildId("choice"),
+            label,
+            hint: newChoiceForm.hint.trim(),
+            targetNodeCode,
+            conditions: [],
+            actions: [],
+          },
+        ],
+      };
+
+      const payload = await requestAdmin<{ game: StoryGame; node: StoryNode }>(
+        withProjectQuery(`/api/admin/nodes/${selectedNodeCode}`, currentProjectSlug),
+        {
+          method: "PATCH",
+          body: JSON.stringify(buildNodeSavePayload(nextDraft, gameForm.variables)),
+        },
+      );
+
+      syncFromGame(payload.game, payload.node.code);
+      setNewChoiceForm({
+        code: "",
+        label: "",
+        hint: "",
+        targetNodeCode: "",
+        targetNodeTitle: "",
+      });
+      setStatus(targetNodeTitle ? `已创建目标片段并加入选项：${targetNodeTitle}` : "已加入选项");
+    } catch (addChoiceError) {
+      setError(loadErrorMessage(addChoiceError, "新增选项失败"));
     } finally {
       setSaving(false);
     }
@@ -1430,54 +1863,6 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
     ],
     [game.nodes.length, game.startNodeCode, game.tagline, game.title, publishSummary],
   );
-
-  const resourceItems = useMemo<ResourceItem[]>(() => {
-    const items: ResourceItem[] = [];
-    const seen = new Set<string>();
-
-    function pushItem(item: ResourceItem | null) {
-      if (!item || !item.url.trim() || seen.has(item.url)) {
-        return;
-      }
-
-      seen.add(item.url);
-      items.push(item);
-    }
-
-    pushItem(
-      game.promoVideoUrl
-        ? {
-            id: "promo-video",
-            label: "宣传视频",
-            kind: "promo-video",
-            url: game.promoVideoUrl,
-          }
-        : null,
-    );
-
-    pushItem(
-      game.promoPosterUrl
-        ? {
-            id: "promo-poster",
-            label: "宣传封面",
-            kind: "promo-poster",
-            url: game.promoPosterUrl,
-          }
-        : null,
-    );
-
-    for (const node of game.nodes) {
-      pushItem({
-        id: `node-video-${node.code}`,
-        label: node.title,
-        kind: "node-video",
-        url: node.videoUrl,
-        relatedNodeCode: node.code,
-      });
-    }
-
-    return items;
-  }, [game]);
 
   function renderConditionEditor(
     conditions: DraftCondition[],
@@ -3037,8 +3422,8 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
 
   function renderProjectWorkspace() {
     return (
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_420px]">
-        <div className="grid gap-5">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_420px] xl:items-start">
+        <div className="grid content-start gap-5 xl:self-start">
           <Panel
             eyebrow="Step 1"
             title="项目配置"
@@ -3067,6 +3452,22 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
                     />
                   </Field>
 
+                  <Field label="项目链接 Slug" hint="用于独立链接和后台切换，如 my-first-project" visibility="logic">
+                    <input
+                      className={className}
+                      value={gameForm.slug}
+                      onChange={(event) => setGameForm((current) => ({ ...current, slug: event.target.value }))}
+                    />
+                  </Field>
+
+                  <Field label="首页排序值" hint="数值越大越靠前；相同则按更新时间排序" visibility="logic">
+                    <input
+                      className={className}
+                      value={gameForm.sortOrder}
+                      onChange={(event) => setGameForm((current) => ({ ...current, sortOrder: event.target.value }))}
+                    />
+                  </Field>
+
                   <Field label="起始片段" hint="玩家点击开始后会进入这个片段。" visibility="logic">
                     <select
                       className={className}
@@ -3083,6 +3484,19 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
                       ))}
                     </select>
                   </Field>
+
+                  <div className="lg:col-span-2">
+                    <label className="flex items-center gap-3 rounded-2xl border border-stone-900/10 bg-white px-4 py-3 text-sm text-stone-800">
+                      <input
+                        type="checkbox"
+                        checked={gameForm.listedOnHome}
+                        onChange={(event) =>
+                          setGameForm((current) => ({ ...current, listedOnHome: event.target.checked }))
+                        }
+                      />
+                      <span>在首页项目大厅展示此项目</span>
+                    </label>
+                  </div>
                 </div>
               </div>
 
@@ -3120,6 +3534,29 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
                       />
                     </Field>
                   </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <label className="inline-flex cursor-pointer items-center rounded-full border border-stone-900/10 px-4 py-3 text-sm text-stone-800 transition hover:border-stone-900/30">
+                    {uploadingPromo ? "上传中..." : "上传宣传视频"}
+                    <input
+                      type="file"
+                      accept="video/*"
+                      className="hidden"
+                      disabled={uploadingPromo}
+                      onChange={(event) => void uploadPromoVideo(event)}
+                    />
+                  </label>
+                  <label className="inline-flex cursor-pointer items-center rounded-full border border-stone-900/10 px-4 py-3 text-sm text-stone-800 transition hover:border-stone-900/30">
+                    {uploadingPromoPoster ? "上传中..." : "上传入口封面"}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      disabled={uploadingPromoPoster}
+                      onChange={(event) => void uploadPromoPoster(event)}
+                    />
+                  </label>
                 </div>
               </div>
 
@@ -3159,6 +3596,14 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
                   >
                     重置为空白项目
                   </button>
+                  <button
+                    type="button"
+                    className="rounded-full border border-rose-300 px-4 py-3 text-sm text-rose-700 transition hover:bg-rose-50 disabled:opacity-50"
+                    onClick={() => void deleteCurrentProject()}
+                    disabled={deletingProject || saving || projects.length <= 1}
+                  >
+                    {deletingProject ? "删除中..." : "删除当前项目"}
+                  </button>
                 </div>
               </div>
             </div>
@@ -3188,26 +3633,26 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
                 : "项目保存后，直接去“搭建剧情”创建首个片段。没有首片段时，前台不会进入剧情。"
             }
           >
-            <div className="grid gap-4">
-              <div className="rounded-3xl border border-stone-900/10 bg-stone-50/70 p-4 text-sm leading-7 text-stone-700">
-                {hasNodes
-                  ? "去“搭建剧情”继续创建新片段、检查片段关系，再进入“编辑片段”和“设置出口”逐段完善。"
-                  : "先保存当前项目配置，然后进入“搭建剧情”，创建首个片段并把它设为起始片段。"}
+              <div className="grid gap-4">
+                <div className="rounded-3xl border border-stone-900/10 bg-stone-50/70 p-4 text-sm leading-7 text-stone-700">
+                  {hasNodes
+                    ? "继续去剧情工作台补片段、连跳转，再逐段完善每个片段的内容。"
+                    : "先保存当前项目配置，然后去剧情工作台创建首个片段，并把它设为起始片段。"}
+                </div>
+                <button
+                  type="button"
+                  className="rounded-full bg-stone-950 px-4 py-3 text-sm text-white transition hover:bg-stone-800"
+                  onClick={openFlowComposer}
+                >
+                  前往剧情工作台
+                </button>
               </div>
-              <button
-                type="button"
-                className="rounded-full bg-stone-950 px-4 py-3 text-sm text-white transition hover:bg-stone-800"
-                onClick={() => setActiveTab("flow")}
-              >
-                前往搭建剧情
-              </button>
-            </div>
           </Panel>
 
           <Panel
             eyebrow="Check"
-            title="可玩性检查"
-            description="这里只看会不会影响玩家正常游玩的关键问题。"
+            title="发布前检查"
+            description="这里只保留会直接影响玩家体验的关键问题。"
           >
             <div className="grid gap-3 text-sm">
               <HelperCard title="怎么判断能不能继续做前台体验">
@@ -3245,455 +3690,319 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
               </div>
             </div>
           </Panel>
+
+          <Panel
+            eyebrow="Transfer"
+            title="项目迁移"
+            description="用于备份、跨环境搬运或重置当前项目。"
+          >
+            <div className="grid gap-3">
+              <button
+                type="button"
+                className="rounded-full border border-stone-900/10 px-4 py-3 text-sm text-stone-800 transition hover:border-stone-900/30 disabled:opacity-50"
+                onClick={() => void exportProject()}
+                disabled={saving || importing}
+              >
+                导出项目 JSON
+              </button>
+              <label className="inline-flex cursor-pointer items-center justify-center rounded-full border border-stone-900/10 px-4 py-3 text-sm text-stone-800 transition hover:border-stone-900/30">
+                导入项目 JSON
+                <input
+                  type="file"
+                  accept="application/json"
+                  className="hidden"
+                  onChange={(event) => void importProject(event)}
+                />
+              </label>
+              <button
+                type="button"
+                className="rounded-full border border-rose-200 px-4 py-3 text-sm text-rose-700 transition hover:bg-rose-50 disabled:opacity-50"
+                onClick={() => void resetToBlankProject()}
+                disabled={saving}
+              >
+                重置为空白项目
+              </button>
+              <button
+                type="button"
+                className="rounded-full border border-rose-300 px-4 py-3 text-sm text-rose-700 transition hover:bg-rose-50 disabled:opacity-50"
+                onClick={() => void deleteCurrentProject()}
+                disabled={deletingProject || saving || projects.length <= 1}
+              >
+                {deletingProject ? "删除中..." : "删除当前项目"}
+              </button>
+            </div>
+          </Panel>
         </div>
       </div>
     );
   }
 
-  function renderAssetsWorkspace() {
+function renderFlowWorkspace() {
     return (
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_420px]">
-        <div className="grid gap-5">
-          <Panel
-            eyebrow="Step 5"
-            title="入口素材"
-            description="集中维护作品入口页会用到的宣传视频、封面和开场说明。"
-          >
-            <div className="grid gap-4">
-              <HelperCard title="这一页的用法">
-                这一页只处理素材和发布前检查，不负责剧情跳转。剧情结构仍然在“搭建剧情”“编辑片段”“设置出口”里维护。
-              </HelperCard>
-              <div className="grid gap-4 lg:grid-cols-2">
-                <Field label="宣传视频 URL" visibility="player">
-                  <input
-                    className={className}
-                    value={gameForm.promoVideoUrl}
-                    onChange={(event) =>
-                      setGameForm((current) => ({ ...current, promoVideoUrl: event.target.value }))
-                    }
-                  />
-                </Field>
-
-                <Field label="宣传封面 URL" visibility="player">
-                  <input
-                    className={className}
-                    value={gameForm.promoPosterUrl}
-                    onChange={(event) =>
-                      setGameForm((current) => ({ ...current, promoPosterUrl: event.target.value }))
-                    }
-                  />
-                </Field>
+      <div className="grid gap-5">
+        <Panel
+          eyebrow="Workspace"
+          title={hasNodes ? "剧情工作台" : "先创建首个片段"}
+          description="在这里搭剧情树、选中片段、继续创作和编辑内容。"
+        >
+          <div className="grid gap-5">
+            <div className="grid gap-3 lg:grid-cols-4">
+              <div className="rounded-2xl border border-stone-900/10 bg-white px-4 py-3">
+                <div className="text-[11px] uppercase tracking-[0.25em] text-stone-500">片段</div>
+                <div className="mt-1 text-2xl text-stone-950">{publishSummary.totalNodes}</div>
               </div>
-
-              <Field label="宣传文案" hint="用于序章前的宣传页简介。" visibility="player">
-                <textarea
-                  className={textareaClass}
-                  value={gameForm.promoText}
-                  onChange={(event) => setGameForm((current) => ({ ...current, promoText: event.target.value }))}
-                />
-              </Field>
-
-              <div className="flex flex-wrap gap-3">
-                <label className="inline-flex cursor-pointer items-center rounded-full border border-stone-900/10 px-4 py-3 text-sm text-stone-800 transition hover:border-stone-900/30">
-                  {uploadingPromo ? "上传中..." : "上传宣传视频"}
-                  <input
-                    type="file"
-                    accept="video/*"
-                    className="hidden"
-                    onChange={(event) => void uploadPromoVideo(event)}
-                  />
-                </label>
-
-                <button
-                  type="button"
-                  className="rounded-full bg-stone-950 px-4 py-3 text-sm text-white transition hover:bg-stone-800 disabled:opacity-50"
-                  onClick={() => void saveGameSettings()}
-                  disabled={saving}
-                >
-                    保存入口页素材
-                </button>
+              <div className="rounded-2xl border border-stone-900/10 bg-white px-4 py-3">
+                <div className="text-[11px] uppercase tracking-[0.25em] text-stone-500">出口</div>
+                <div className="mt-1 text-2xl text-stone-950">{publishSummary.totalChoices}</div>
               </div>
-            </div>
-          </Panel>
-
-          <Panel
-            eyebrow="Scene Video"
-            title="当前片段视频"
-            description="上传后会先回填到当前草稿，仍然需要保存片段。"
-          >
-            {draftNode ? (
-              <div className="grid gap-4">
-                <Field label="当前片段" visibility="logic">
-                  <input className={className} value={selectedNode?.title ?? ""} readOnly />
-                </Field>
-
-                <Field label="视频地址" visibility="player">
-                  <input
-                    className={className}
-                    value={draftNode.videoUrl}
-                    onChange={(event) =>
-                      setDraftNode((current) => (current ? { ...current, videoUrl: event.target.value } : current))
-                    }
-                  />
-                </Field>
-
-                <div className="flex flex-wrap gap-3">
-                  <label className="inline-flex cursor-pointer items-center rounded-full border border-stone-900/10 px-4 py-3 text-sm text-stone-800 transition hover:border-stone-900/30">
-                    {uploadingNode ? "上传中..." : "上传片段视频"}
-                    <input type="file" accept="video/*" className="hidden" onChange={(event) => void uploadNodeVideo(event)} />
-                  </label>
-
-                  <button
-                    type="button"
-                    className="rounded-full bg-stone-950 px-4 py-3 text-sm text-white transition hover:bg-stone-800 disabled:opacity-50"
-                    onClick={() => void saveNode()}
-                    disabled={saving}
-                  >
-                    保存当前片段
-                  </button>
+              <div className="rounded-2xl border border-stone-900/10 bg-white px-4 py-3">
+                <div className="text-[11px] uppercase tracking-[0.25em] text-stone-500">时间线事件</div>
+                <div className="mt-1 text-2xl text-stone-950">{publishSummary.totalEvents}</div>
+              </div>
+              <div
+                className={`rounded-2xl border px-4 py-3 ${
+                  publishSummary.ready
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : "border-amber-200 bg-amber-50 text-amber-800"
+                }`}
+              >
+                <div className="text-[11px] uppercase tracking-[0.25em]">结构状态</div>
+                <div className="mt-2 text-sm">
+                  {publishSummary.ready ? "可试玩发布" : `待处理 ${publishSummary.noLinkNodes + publishSummary.missingVideo + publishSummary.unreachableChoices} 项`}
                 </div>
               </div>
-            ) : (
-              <div className="rounded-3xl border border-dashed border-stone-900/15 px-4 py-8 text-sm leading-7 text-stone-600">
-                先创建或选择一个片段，再管理它的视频资源。
-              </div>
-            )}
-          </Panel>
-        </div>
+            </div>
 
-        <Panel
-          eyebrow="Library"
-          title="已登记素材"
-          description="用来快速确认这些地址是否已经正确挂进项目。"
-        >
-          {resourceItems.length ? (
-            <div className="grid gap-3">
-              {resourceItems.map((item) => (
-                <div key={item.id} className="rounded-2xl border border-stone-900/10 bg-stone-50 p-4">
-                  <div className="text-sm font-medium text-stone-900">{item.label}</div>
-                  <div className="mt-1 text-xs text-stone-500">
-                    {item.kind === "promo-video"
-                      ? "宣传视频"
-                      : item.kind === "promo-poster"
-                        ? "宣传封面"
-                        : `片段视频${item.relatedNodeCode ? ` · ${item.relatedNodeCode}` : ""}`}
-                  </div>
-                  <div className="mt-3 break-all text-xs leading-6 text-stone-700">{item.url}</div>
+            <div ref={flowComposerRef} className="rounded-3xl border border-stone-900/10 bg-stone-50/70 p-4">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                <div className="grid flex-1 gap-4 lg:grid-cols-[minmax(0,1.2fr)_220px_180px]">
+                  <Field label="新片段标题" visibility="player">
+                    <input
+                      className={className}
+                      value={newNodeForm.title}
+                      onChange={(event) =>
+                        setNewNodeForm((current) => ({ ...current, title: event.target.value }))
+                      }
+                      placeholder="如 序章 / 电梯间 / 结局A"
+                    />
+                  </Field>
+
+                  <Field label="新片段编码" hint="编码用于跳转和后台定位" visibility="logic">
+                    <input
+                      className={className}
+                      value={newNodeForm.code}
+                      onChange={(event) =>
+                        setNewNodeForm((current) => ({ ...current, code: event.target.value }))
+                      }
+                      placeholder="如 prologue_gate"
+                    />
+                  </Field>
+
+                  <Field label="新片段类型" visibility="logic">
+                    <select
+                      className={className}
+                      value={newNodeForm.nodeType}
+                      onChange={(event) =>
+                        setNewNodeForm((current) => ({
+                          ...current,
+                          nodeType: event.target.value as "video" | "ending",
+                        }))
+                      }
+                    >
+                      {Object.entries(nodeTypeLabel).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                </div>
+
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    className="rounded-full bg-stone-950 px-5 py-3 text-sm text-white transition hover:bg-stone-800 disabled:opacity-50"
+                    onClick={() => void createNode()}
+                    disabled={saving}
+                  >
+                    {hasNodes ? "新增片段" : "创建首个片段"}
+                  </button>
+                  {selectedNode ? (
+                    <button
+                      type="button"
+                      className="rounded-full border border-stone-900/10 px-5 py-3 text-sm text-stone-800 transition hover:border-stone-900/30"
+                      onClick={() =>
+                        setNewNodeForm((current) => ({
+                          ...current,
+                          title: selectedNode.title ? `${selectedNode.title} / 新分支` : current.title,
+                        }))
+                      }
+                    >
+                      以当前片段为基础命名
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-3 text-xs">
+                {!game.startNodeCode && hasNodes ? (
+                  <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-800">
+                    还没设置起始片段
+                  </span>
+                ) : null}
+                {selectedNode ? (
+                  <span className="rounded-full bg-white px-3 py-1 text-stone-600">
+                    当前编辑 {selectedNode.title || selectedNode.code}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-3">
+              {Object.values(playerScenePresentation).map((scene) => (
+                <div
+                  key={scene.stage}
+                  className="rounded-2xl border border-stone-900/10 bg-white px-4 py-3"
+                >
+                  <span className={`rounded-full px-3 py-1 text-xs ${scene.badgeClassName}`}>
+                    {scene.label}
+                  </span>
+                  <p className="mt-3 text-xs leading-6 text-stone-600">{scene.detail}</p>
                 </div>
               ))}
             </div>
-          ) : (
-            <div className="rounded-3xl border border-dashed border-stone-900/15 px-4 py-8 text-sm leading-7 text-stone-600">
-              还没有登记任何素材地址。
-            </div>
-          )}
-        </Panel>
-      </div>
-    );
-  }
 
-  function renderFlowWorkspace() {
-    return (
-      <div className="grid gap-5">
-        <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_420px]">
-          <div className="grid gap-5">
-            <Panel
-              eyebrow="Step 2"
-              title={hasNodes ? "继续搭建剧情" : "先创建首个片段"}
-              description="这一步先把剧情骨架搭出来。先有片段，再谈片段里的细节。"
-            >
-              <div className="grid gap-4">
-                <HelperCard title="这一页的用法">
-                  先创建片段，再用流程图检查片段之间是否连通。点任意片段后，会自动进入“编辑片段”继续补内容。
-                </HelperCard>
-                <div className="rounded-3xl border border-stone-900/10 bg-stone-50/70 p-4">
-                  <div className="mb-4 text-sm font-medium text-stone-900">创建新片段</div>
-                  <div className="grid gap-4 lg:grid-cols-2">
-                    <Field label="片段标题" visibility="player">
-                      <input
-                        className={className}
-                        value={newNodeForm.title}
-                        onChange={(event) =>
-                          setNewNodeForm((current) => ({ ...current, title: event.target.value }))
-                        }
-                        placeholder="例如 序章 / 城门夜谈 / 结局A"
-                      />
-                    </Field>
-
-                    <Field label="片段编码" hint="可留空，系统会按标题自动生成。" visibility="logic">
-                      <input
-                        className={className}
-                        value={newNodeForm.code}
-                        onChange={(event) =>
-                          setNewNodeForm((current) => ({ ...current, code: event.target.value }))
-                        }
-                        placeholder="例如 prologue_gate"
-                      />
-                    </Field>
-
-                    <Field label="片段类型" visibility="logic">
-                      <select
-                        className={className}
-                        value={newNodeForm.nodeType}
-                        onChange={(event) =>
-                          setNewNodeForm((current) => ({
-                            ...current,
-                            nodeType: event.target.value as "video" | "ending",
-                          }))
-                        }
+              <div className="grid gap-5">
+                <div className="rounded-3xl border border-stone-900/10 bg-white p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                    <div className="text-sm font-medium text-stone-900">剧情树</div>
+                    <div className="mt-1 text-xs leading-6 text-stone-500">
+                      点选节点后，下方会直接切换到对应片段的创作面板。
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-xs text-stone-500">
+                    {([
+                      { id: "all", label: "全部" },
+                      { id: "issues", label: "只看问题" },
+                      { id: "start", label: "起始" },
+                      { id: "ending", label: "结局" },
+                      { id: "isolated", label: "孤立" },
+                    ] as const).map((filter) => (
+                      <button
+                        key={filter.id}
+                        type="button"
+                        className={`rounded-full px-3 py-1 transition ${
+                          branchGraphFilter === filter.id
+                            ? "bg-stone-950 text-white"
+                            : "border border-stone-900/10 bg-stone-50 text-stone-600 hover:border-stone-900/30"
+                        }`}
+                        onClick={() => setBranchGraphFilter(filter.id)}
                       >
-                        {Object.entries(nodeTypeLabel).map(([value, label]) => (
-                          <option key={value} value={value}>
-                            {label}
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
-
-                    <Field label="视频地址" visibility="player">
-                      <input
-                        className={className}
-                        value={newNodeForm.videoUrl}
-                        onChange={(event) =>
-                          setNewNodeForm((current) => ({ ...current, videoUrl: event.target.value }))
-                        }
-                      />
-                    </Field>
-                  </div>
-
-                  <div className="mt-4 flex flex-wrap gap-3">
-                    <button
-                      type="button"
-                      className="rounded-full bg-stone-950 px-4 py-3 text-sm text-white transition hover:bg-stone-800 disabled:opacity-50"
-                      onClick={() => void createNode()}
-                      disabled={saving}
-                    >
-                      {hasNodes ? "创建新片段" : "创建首个片段"}
-                    </button>
-                    {!game.startNodeCode && hasNodes ? (
-                      <div className="rounded-full bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                        你还没设置起始片段，记得回“项目配置”补上。
-                      </div>
-                    ) : null}
+                        {filter.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
+
+                <div className="mt-4">
+                  {hasNodes ? (
+                    <BranchGraph
+                      game={game}
+                      selectedNodeCode={selectedNodeCode}
+                      onSelectNode={handleSelectNode}
+                      onAddNext={(nodeCode) => prepareLinkedNodeFromGraph(nodeCode, "auto")}
+                      onAddBranch={(nodeCode) => prepareLinkedNodeFromGraph(nodeCode, "choice")}
+                      onPreviewNode={openPreviewNode}
+                      filter={branchGraphFilter}
+                    />
+                  ) : (
+                    <div className="rounded-3xl border border-dashed border-stone-900/15 px-4 py-8 text-sm leading-7 text-stone-600">
+                      还没有任何片段。先创建首个片段，剧情树才会出现。
+                    </div>
+                  )}
+                </div>
               </div>
-            </Panel>
 
-            <Panel
-              eyebrow="Segments"
-              title="片段目录工作台"
-              description="这里集中处理片段整理、定位问题、设置起点和进入不同编辑工作区。"
-            >
-              {hasNodes ? (
-                <div className="grid gap-4">
-                  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_260px]">
-                    <div className="rounded-3xl border border-stone-900/10 bg-stone-50/80 p-4">
-                      <div className="text-sm font-medium text-stone-900">当前选中片段</div>
-                      {currentNodeEntry ? (
-                        <div className="mt-3 grid gap-3">
-                          <div className="rounded-2xl border border-stone-900/10 bg-white px-4 py-4">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="rounded-full bg-stone-950 px-3 py-1 text-xs text-white">
-                                {currentNodeEntry.isEnding ? "结局片段" : "视频片段"}
-                              </span>
-                              {currentNodeEntry.isStart ? (
-                                <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs text-emerald-700">
-                                  起始片段
-                                </span>
-                              ) : null}
-                              {currentNodeEntry.issues.map((issue) => (
-                                <span
-                                  key={`${currentNodeEntry.node.code}-${issue}`}
-                                  className="rounded-full bg-rose-100 px-3 py-1 text-xs text-rose-700"
-                                >
-                                  {issue}
-                                </span>
-                              ))}
-                            </div>
-                            <div className="mt-3 text-lg text-stone-950">
-                              {currentNodeEntry.node.title || "未命名片段"}
-                            </div>
-                            <div className="mt-1 text-sm text-stone-500">
-                              {currentNodeEntry.node.code}
-                            </div>
-                            <div className="mt-3 text-sm leading-7 text-stone-700">
-                              {currentNodeEntry.node.description || "这个片段还没有填写对外展示说明。"}
-                            </div>
+              <div className="grid gap-5">
+                {issueNodeEntries.length ? (
+                  <div className="rounded-3xl border border-rose-200 bg-rose-50/80 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-rose-900">待修正片段</div>
+                        <div className="mt-1 text-xs leading-6 text-rose-700">
+                          这些问题会直接影响前台播放和跳转，建议优先处理。
+                        </div>
+                      </div>
+                      <div className="rounded-full bg-white px-3 py-1 text-xs text-rose-700">
+                        {issueNodeEntries.length} 个
+                      </div>
+                    </div>
+                    <div className="mt-4 grid gap-2 md:grid-cols-2">
+                      {issueNodeEntries.slice(0, 6).map((entry) => (
+                        <button
+                          key={entry.node.code}
+                          type="button"
+                          className="rounded-2xl border border-rose-200 bg-white px-4 py-3 text-left transition hover:border-rose-300"
+                          onClick={() => {
+                            setBranchGraphFilter("issues");
+                            handleSelectNode(entry.node.code);
+                          }}
+                        >
+                          <div className="text-sm font-medium text-stone-900">
+                            {entry.node.title || entry.node.code}
                           </div>
-
-                          <div className="flex flex-wrap gap-2">
-                            <button
-                              type="button"
-                              className="rounded-full bg-stone-950 px-4 py-2 text-sm text-white transition hover:bg-stone-800"
-                              onClick={() => focusNode(currentNodeEntry.node.code, "scene")}
-                            >
-                              进入片段编辑
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded-full border border-stone-900/10 px-4 py-2 text-sm text-stone-800 transition hover:border-stone-900/30"
-                              onClick={() => focusNode(currentNodeEntry.node.code, "choices")}
-                            >
-                              编辑出口
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded-full border border-stone-900/10 px-4 py-2 text-sm text-stone-800 transition hover:border-stone-900/30"
-                              onClick={openPreviewFromSelectedNode}
-                            >
-                              试玩此片段
-                            </button>
-                            {!currentNodeEntry.isStart ? (
-                              <button
-                                type="button"
-                                className="rounded-full border border-emerald-200 px-4 py-2 text-sm text-emerald-700 transition hover:bg-emerald-50 disabled:opacity-50"
-                                onClick={() => void setStartNode(currentNodeEntry.node.code)}
-                                disabled={saving}
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {entry.issues.map((issue) => (
+                              <span
+                                key={`${entry.node.code}-${issue}`}
+                                className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] text-rose-700"
                               >
-                                设为起始片段
-                              </button>
-                            ) : null}
+                                {issue}
+                              </span>
+                            ))}
                           </div>
-                        </div>
-                      ) : (
-                        <div className="mt-3 rounded-2xl border border-dashed border-stone-900/12 px-4 py-6 text-sm leading-7 text-stone-500">
-                          先从左侧或结构图里选中一个片段，这里才会出现对应的管理动作。
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="rounded-3xl border border-stone-900/10 bg-white p-4">
-                      <div className="text-sm font-medium text-stone-900">问题片段速览</div>
-                      <div className="mt-3 grid gap-2">
-                        {issueNodeEntries.length ? (
-                          issueNodeEntries.slice(0, 6).map((entry) => (
-                            <button
-                              key={entry.node.code}
-                              type="button"
-                              className="rounded-2xl border border-stone-900/10 bg-stone-50 px-3 py-3 text-left transition hover:border-stone-900/30"
-                              onClick={() => focusNode(entry.node.code, "scene")}
-                            >
-                              <div className="text-sm font-medium text-stone-900">
-                                {entry.node.title || entry.node.code}
-                              </div>
-                              <div className="mt-2 flex flex-wrap gap-1.5">
-                                {entry.issues.map((issue) => (
-                                  <span
-                                    key={`${entry.node.code}-${issue}`}
-                                    className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] text-rose-700"
-                                  >
-                                    {issue}
-                                  </span>
-                                ))}
-                              </div>
-                            </button>
-                          ))
-                        ) : (
-                          <div className="rounded-2xl border border-dashed border-stone-900/12 px-3 py-5 text-sm leading-7 text-stone-500">
-                            当前没有问题片段，结构质量还不错。
-                          </div>
-                        )}
-                      </div>
+                        </button>
+                      ))}
                     </div>
                   </div>
-                </div>
-              ) : (
-                <div className="rounded-3xl border border-dashed border-stone-900/15 px-4 py-8 text-sm leading-7 text-stone-600">
-                  先创建首个片段，片段目录工作台才会出现。
-                </div>
-              )}
-            </Panel>
-
-            <Panel
-              eyebrow="Structure"
-              title="剧情结构图"
-              description="这里用来检查片段之间的连接关系，不是逐字段编辑区。"
-            >
-              {hasNodes ? (
-                <BranchGraph
-                  game={game}
-                  selectedNodeCode={selectedNodeCode}
-                  onSelectNode={handleSelectNode}
-                />
-              ) : (
-                <div className="rounded-3xl border border-dashed border-stone-900/15 px-4 py-8 text-sm leading-7 text-stone-600">
-                  还没有任何片段。先在上方创建首个片段，结构图才会出现。
-                </div>
-              )}
-            </Panel>
+                ) : null}
+              </div>
+            </div>
           </div>
 
-          <div className="grid gap-5">
-            <Panel
-              eyebrow="Overview"
-              title="剧情概况"
-              description="快速确认当前项目已经搭到哪一步。"
-            >
-              <div className="grid gap-3 text-sm text-stone-700">
-                <div className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-3">
-                  起始片段：{game.startNodeCode ? getNodeDisplayName(game, game.startNodeCode) : "尚未设置"}
-                </div>
-                <div className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-3">
-                  当前选中：{selectedNode ? `${selectedNode.title} / ${selectedNode.code}` : "尚未选中"}
-                </div>
-                <div className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-3">
-                  片段总数：{publishSummary.totalNodes}
-                </div>
-                <div className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-3">
-                  结尾出口：{publishSummary.totalChoices}
-                </div>
-                <div className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-3">
-                  缺出口片段：{publishSummary.noLinkNodes}
-                </div>
-                <div className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-3">
-                  无效目标：{publishSummary.unreachableChoices}
-                </div>
-              </div>
-            </Panel>
-
-            <Panel
-              eyebrow="Next"
-              title="搭完后做什么"
-              description="当片段数量开始增多，就按这个顺序往下走。"
-            >
-              <div className="grid gap-3 text-sm leading-7 text-stone-700">
-                <div className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-3">
-                  1. 选中一个片段，进入“编辑片段”补标题、正文、视频和时间线。
-                </div>
-                <div className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-3">
-                  2. 去“设置出口”决定这一段播完后玩家能去哪里。
-                </div>
-                <div className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-3">
-                  3. 最后到“素材与发布”统一检查视频地址和结构风险。
-                </div>
-              </div>
-            </Panel>
-          </div>
-        </div>
+          {selectedNode ? <div className="grid gap-5">{renderSceneWorkspace()}</div> : null}
+        </Panel>
       </div>
     );
   }
 
   function renderSceneWorkspace() {
     return (
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_420px]">
-        <div className="grid gap-5">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_420px] xl:items-start">
+        <div className="grid content-start gap-5 xl:self-start">
           <Panel
-            eyebrow="Step 3"
-            title={selectedNode ? `编辑片段：${selectedNode.title}` : "编辑片段"}
-            description="这里管理单个片段的基础信息、视频、自动跳转和结局属性。"
+            eyebrow="Node"
+            title={selectedNode ? `当前片段：${selectedNode.title}` : "当前片段"}
+            description="片段内容、视频、跳转出口和时间线互动都在这里完成。"
           >
             {draftNode ? (
               <div className="grid gap-4">
-                <div className="rounded-3xl border border-stone-900/10 bg-[linear-gradient(135deg,rgba(255,251,235,0.92),rgba(255,255,255,0.92))] p-4">
+                <div className="rounded-3xl border border-stone-900/10 bg-stone-50/80 p-4">
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="rounded-full bg-stone-950 px-3 py-1 text-xs text-white">
                           {draftNode.nodeType === "ending" ? "结局片段" : "视频片段"}
                         </span>
-                        {sceneDirty ? (
+                        {selectedNodeEntry ? (
+                          <span
+                            className={`rounded-full px-3 py-1 text-xs ${selectedNodeEntry.playerScene.badgeClassName}`}
+                          >
+                            {selectedNodeEntry.playerScene.label}
+                          </span>
+                        ) : null}
+                        {nodeDirty ? (
                           <span className="rounded-full bg-amber-100 px-3 py-1 text-xs text-amber-800">
                             有未保存修改
                           </span>
@@ -3715,6 +4024,24 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
                       <div className="mt-1 text-sm text-stone-600">
                         编码：{selectedNodeCode || "未设置"} · 时间线事件 {draftNode.timelineEvents.length} 个 · 结尾出口 {draftNode.choices.length} 个
                       </div>
+                      {selectedNodeEntry ? (
+                        <div className="mt-3 rounded-2xl border border-stone-900/10 bg-white px-4 py-3 text-sm leading-7 text-stone-600">
+                          玩家侧呈现：<span className="font-medium text-stone-950">{selectedNodeEntry.playerScene.label}</span>。
+                          {selectedNodeEntry.playerScene.detail}
+                        </div>
+                      ) : null}
+                      {selectedNodeEntry?.issues.length ? (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {selectedNodeEntry.issues.map((issue) => (
+                            <span
+                              key={`${selectedNodeEntry.node.code}-${issue}`}
+                              className="rounded-full bg-rose-100 px-3 py-1 text-xs text-rose-700"
+                            >
+                              {issue}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
 
                     <div className="flex flex-wrap gap-2">
@@ -3752,26 +4079,19 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
                       <button
                         type="button"
                         className="rounded-full border border-stone-900/10 px-4 py-2 text-sm text-stone-800 transition hover:border-stone-900/30"
-                        onClick={() => setActiveTab("choices")}
+                        onClick={openFlowComposer}
                       >
-                        去设置出口
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-full border border-stone-900/10 px-4 py-2 text-sm text-stone-800 transition hover:border-stone-900/30"
-                        onClick={() => setActiveTab("flow")}
-                      >
-                        返回结构图
+                        新建片段
                       </button>
                     </div>
                   </div>
                 </div>
 
-                <HelperCard title="这一页编辑什么">
-                  这里处理单个片段本身的内容，包括标题、描述、视频、自动跳转和时间线互动。片段结尾有哪些出口，不在这里改，在“设置出口”里改。
-                </HelperCard>
-                <div className="rounded-3xl border border-stone-900/10 bg-stone-50/70 p-4">
-                  <div className="mb-4 text-sm font-medium text-stone-900">基础信息</div>
+                <div className="rounded-3xl border border-stone-900/10 bg-white p-4">
+                  <div className="mb-4">
+                    <div className="text-sm font-medium text-stone-900">片段内容</div>
+                    <div className="mt-1 text-xs leading-6 text-stone-500">玩家会看到的标题、说明和正文。</div>
+                  </div>
                   <div className="grid gap-4 lg:grid-cols-2">
                     <Field label="片段标题" visibility="player">
                       <input
@@ -3816,26 +4136,25 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
                         />
                       </Field>
                     </div>
+
+                    <div className="lg:col-span-2">
+                      <Field label="正文文案" hint="用于字幕、简介或前端辅助展示。" visibility="player">
+                        <textarea
+                          className={textareaClass}
+                          value={draftNode.transcript}
+                          onChange={(event) =>
+                            setDraftNode((current) =>
+                              current ? { ...current, transcript: event.target.value } : current,
+                            )
+                          }
+                        />
+                      </Field>
+                    </div>
                   </div>
                 </div>
 
                 <div className="rounded-3xl border border-stone-900/10 bg-white p-4">
-                  <div className="mb-4 text-sm font-medium text-stone-900">剧情文案</div>
-                  <Field label="正文文案" hint="用于字幕、简介或前端辅助展示。" visibility="player">
-                    <textarea
-                      className={textareaClass}
-                      value={draftNode.transcript}
-                      onChange={(event) =>
-                        setDraftNode((current) =>
-                          current ? { ...current, transcript: event.target.value } : current,
-                        )
-                      }
-                    />
-                  </Field>
-                </div>
-
-                <div className="rounded-3xl border border-stone-900/10 bg-white p-4">
-                  <div className="mb-4 text-sm font-medium text-stone-900">播放与跳转</div>
+                  <div className="mb-4 text-sm font-medium text-stone-900">视频与流转</div>
                   <div className="grid gap-4 lg:grid-cols-2">
                     <Field label="视频地址" visibility="player">
                       <input
@@ -3910,6 +4229,293 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
                     </label>
                   </div>
                 </div>
+
+                <div className="rounded-3xl border border-stone-900/10 bg-white p-4">
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium text-stone-900">结尾出口</div>
+                      <div className="mt-1 text-xs leading-6 text-stone-500">
+                        这里决定这段播完后玩家能去哪里。中途插入的选项仍放在时间线里。
+                      </div>
+                    </div>
+                    <div className="rounded-full bg-stone-100 px-3 py-1 text-xs text-stone-700">
+                      当前 {draftNode.choices.length} 个出口
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-3">
+                    {draftNode.nodeType === "video" && !draftNode.autoNextNodeCode && !draftNode.choices.length ? (
+                      <div className="rounded-full bg-amber-50 px-4 py-2 text-sm text-amber-800">
+                        当前还没有出口，玩家会停在这里。
+                      </div>
+                    ) : null}
+                    {draftNode.autoNextNodeCode && draftNode.choices.length ? (
+                      <div className="rounded-full bg-amber-50 px-4 py-2 text-sm text-amber-800">
+                        同时设置了自动跳转和选项，建议保留一种主要流转方式。
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {draftNode.choices.length ? (
+                    <div className="mt-4 grid gap-4">
+                      {draftNode.choices.map((choice, index) => (
+                        <div
+                          key={`${choice.code}-${index}`}
+                          className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-4"
+                        >
+                          <div className="mb-4 flex items-center justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-medium text-stone-900">
+                                {choice.label || `选项 ${index + 1}`}
+                              </div>
+                              <div className="mt-1 text-xs text-stone-500">
+                                {choice.code || "未设置编码"} · {choice.targetNodeCode || "未设置目标片段"}
+                              </div>
+                            </div>
+
+                            <button
+                              type="button"
+                              className="rounded-full border border-rose-200 px-4 py-2 text-sm text-rose-700 transition hover:bg-rose-50"
+                              onClick={() =>
+                                setDraftNode((current) =>
+                                  current
+                                    ? {
+                                        ...current,
+                                        choices: current.choices.filter((_, entryIndex) => entryIndex !== index),
+                                      }
+                                    : current,
+                                )
+                              }
+                            >
+                              删除选项
+                            </button>
+                          </div>
+
+                          <div className="grid gap-4 lg:grid-cols-2">
+                            <Field label="选项编码" visibility="logic">
+                              <input
+                                className={className}
+                                value={choice.code}
+                                onChange={(event) =>
+                                  setDraftNode((current) =>
+                                    current
+                                      ? {
+                                          ...current,
+                                          choices: current.choices.map((entry, entryIndex) =>
+                                            entryIndex === index ? { ...entry, code: event.target.value } : entry,
+                                          ),
+                                        }
+                                      : current,
+                                  )
+                                }
+                              />
+                            </Field>
+
+                            <Field label="目标片段" visibility="logic">
+                              <select
+                                className={className}
+                                value={choice.targetNodeCode}
+                                onChange={(event) =>
+                                  setDraftNode((current) =>
+                                    current
+                                      ? {
+                                          ...current,
+                                          choices: current.choices.map((entry, entryIndex) =>
+                                            entryIndex === index
+                                              ? { ...entry, targetNodeCode: event.target.value }
+                                              : entry,
+                                          ),
+                                        }
+                                      : current,
+                                  )
+                                }
+                              >
+                                <option value="">请选择目标片段</option>
+                                {game.nodes
+                                  .filter((node) => node.code !== selectedNodeCode)
+                                  .map((node) => (
+                                    <option key={node.code} value={node.code}>
+                                      {getNodeDisplayName(game, node.code)}
+                                    </option>
+                                  ))}
+                              </select>
+                            </Field>
+
+                            <Field label="选项文案" visibility="player">
+                              <input
+                                className={className}
+                                value={choice.label}
+                                onChange={(event) =>
+                                  setDraftNode((current) =>
+                                    current
+                                      ? {
+                                          ...current,
+                                          choices: current.choices.map((entry, entryIndex) =>
+                                            entryIndex === index ? { ...entry, label: event.target.value } : entry,
+                                          ),
+                                        }
+                                      : current,
+                                  )
+                                }
+                              />
+                            </Field>
+
+                            <Field label="补充提示" visibility="player">
+                              <input
+                                className={className}
+                                value={choice.hint}
+                                onChange={(event) =>
+                                  setDraftNode((current) =>
+                                    current
+                                      ? {
+                                          ...current,
+                                          choices: current.choices.map((entry, entryIndex) =>
+                                            entryIndex === index ? { ...entry, hint: event.target.value } : entry,
+                                          ),
+                                        }
+                                      : current,
+                                  )
+                                }
+                              />
+                            </Field>
+                          </div>
+
+                          <div className="mt-4 grid gap-4 xl:grid-cols-2">
+                            {renderConditionEditor(toDraftConditions(choice.conditions), (nextConditions) =>
+                              setDraftNode((current) =>
+                                current
+                                  ? {
+                                      ...current,
+                                      choices: current.choices.map((entry, entryIndex) =>
+                                        entryIndex === index
+                                          ? {
+                                              ...entry,
+                                              conditions: toConditionPayload(nextConditions, gameForm.variables),
+                                            }
+                                          : entry,
+                                      ),
+                                    }
+                                  : current,
+                              ),
+                            )}
+
+                            {renderActionEditor(toDraftActions(choice.actions), (nextActions) =>
+                              setDraftNode((current) =>
+                                current
+                                  ? {
+                                      ...current,
+                                      choices: current.choices.map((entry, entryIndex) =>
+                                        entryIndex === index
+                                          ? {
+                                              ...entry,
+                                              actions: toActionPayload(nextActions, gameForm.variables),
+                                            }
+                                          : entry,
+                                      ),
+                                    }
+                                  : current,
+                              ),
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mt-4 rounded-3xl border border-dashed border-stone-900/15 px-4 py-8 text-sm leading-7 text-stone-600">
+                      当前片段还没有结尾选项。
+                    </div>
+                  )}
+
+                  <div className="mt-4 rounded-3xl border border-stone-900/10 bg-white p-4">
+                    <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <div className="text-sm font-medium text-stone-900">给当前片段添加选项出口</div>
+                        <p className="mt-1 text-xs leading-6 text-stone-500">
+                          如果这个选项还没有对应片段，填写“新目标片段标题”，系统会先创建片段，再自动把选项连过去。
+                        </p>
+                      </div>
+                      <span className="w-fit rounded-full border border-amber-200/60 bg-amber-50 px-3 py-1 text-xs text-amber-800">
+                        选项 = 玩家看到的按钮
+                      </span>
+                    </div>
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <Field label="新选项编码" hint="可留空，系统会自动生成。" visibility="logic">
+                        <input
+                          className={className}
+                          value={newChoiceForm.code}
+                          onChange={(event) =>
+                            setNewChoiceForm((current) => ({ ...current, code: event.target.value }))
+                          }
+                        />
+                      </Field>
+
+                      <Field label="连接已有片段" hint="这个选项要跳到已有片段时选择；如果要新建目标片段，这里留空。" visibility="logic">
+                        <select
+                          className={className}
+                          value={newChoiceForm.targetNodeCode}
+                          onChange={(event) =>
+                            setNewChoiceForm((current) => ({ ...current, targetNodeCode: event.target.value }))
+                          }
+                        >
+                          <option value="">请选择目标片段</option>
+                          {game.nodes
+                            .filter((node) => node.code !== selectedNodeCode)
+                            .map((node) => (
+                              <option key={node.code} value={node.code}>
+                                {getNodeDisplayName(game, node.code)}
+                              </option>
+                          ))}
+                        </select>
+                      </Field>
+
+                      <Field label="创建新目标片段" hint="填写后点击按钮，会创建一个新片段并自动接到这个选项后面。" visibility="player">
+                        <input
+                          className={className}
+                          value={newChoiceForm.targetNodeTitle}
+                          onChange={(event) =>
+                            setNewChoiceForm((current) => ({ ...current, targetNodeTitle: event.target.value }))
+                          }
+                          placeholder="如 追上去 / 留在原地"
+                        />
+                      </Field>
+
+                      <Field label="选项文案" visibility="player">
+                        <input
+                          className={className}
+                          value={newChoiceForm.label}
+                          onChange={(event) =>
+                            setNewChoiceForm((current) => ({ ...current, label: event.target.value }))
+                          }
+                        />
+                      </Field>
+
+                      <Field label="补充提示" visibility="player">
+                        <input
+                          className={className}
+                          value={newChoiceForm.hint}
+                          onChange={(event) =>
+                            setNewChoiceForm((current) => ({ ...current, hint: event.target.value }))
+                          }
+                        />
+                      </Field>
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap items-center gap-3">
+                      <button
+                        type="button"
+                        className="rounded-full bg-stone-950 px-4 py-2.5 text-sm text-white transition hover:bg-stone-800 disabled:opacity-50"
+                        onClick={() => void addChoiceToSelectedNode()}
+                        disabled={saving}
+                      >
+                        {newChoiceForm.targetNodeTitle.trim() ? "创建目标片段并加入选项" : "加入当前片段"}
+                      </button>
+                      <span className="text-xs leading-6 text-stone-500">
+                        需要两个分支时，重复添加两次：每个选项各填一个新目标片段标题。
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
               </div>
             ) : (
               <div className="rounded-3xl border border-dashed border-stone-900/15 px-4 py-8 text-sm leading-7 text-stone-600">
@@ -3934,458 +4540,228 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
 
         <div className="grid gap-5">
           <Panel
-            eyebrow="Selected"
-            title="当前片段摘要"
-            description="这里显示当前选中片段的关键信息。"
+            eyebrow="Actions"
+            title="创作动作"
+            description="保存、试玩、复制和从当前片段继续创建后续内容。"
           >
-            {selectedNode ? (
-              <div className="grid gap-3 text-sm text-stone-700">
-                <div className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-3">
-                  编码：{selectedNode.code}
-                </div>
-                <div className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-3">
-                  类型：{nodeTypeLabel[selectedNode.nodeType]}
-                </div>
-                <div className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-3">
-                  结尾选项：{selectedNode.choices?.length ?? 0}
-                </div>
-                <div className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-3">
-                  时间线事件：{selectedNode.timelineEvents?.length ?? 0}
-                </div>
-                <div className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-3">
-                  自动跳转：
-                  {selectedNode.autoNextNodeCode
-                    ? ` ${getNodeDisplayName(game, selectedNode.autoNextNodeCode)}`
-                    : " 无"}
-                </div>
-              </div>
-            ) : (
-              <div className="text-sm text-stone-600">尚未选择片段</div>
-            )}
-          </Panel>
-
-          <Panel
-            eyebrow="Jump"
-            title="快速切换片段"
-            description="项目变大后，从这里直接切换到其他片段会更快。"
-          >
-            <div className="grid gap-3">
-              {game.nodes.map((node) => (
-                <button
-                  key={node.code}
-                  type="button"
-                  className={`rounded-2xl border px-4 py-3 text-left text-sm transition ${
-                    node.code === selectedNodeCode
-                      ? "border-stone-950 bg-stone-950 text-white"
-                      : "border-stone-900/10 bg-stone-50 text-stone-800 hover:border-stone-900/30"
-                  }`}
-                  onClick={() => handleSelectNode(node.code)}
-                >
-                  <div className="font-medium">{node.title}</div>
-                  <div className="mt-1 text-xs opacity-70">{node.code}</div>
-                </button>
-              ))}
-            </div>
-          </Panel>
-        </div>
-      </div>
-    );
-  }
-
-  function renderChoicesWorkspace() {
-    return (
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_420px]">
-        <div className="grid gap-5">
-          <Panel
-            eyebrow="Step 4"
-            title={selectedNode ? `设置出口：${selectedNode.title}` : "设置出口"}
-            description="这里配置片段结尾的分支选项，并给每个选项附加条件和动作。"
-          >
-            {draftNode ? (
+            {selectedNode && draftNode ? (
               <div className="grid gap-4">
-                <div className="rounded-3xl border border-stone-900/10 bg-[linear-gradient(135deg,rgba(255,251,235,0.92),rgba(255,255,255,0.92))] p-4">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded-full bg-stone-950 px-3 py-1 text-xs text-white">片段出口</span>
-                        {sceneDirty ? (
-                          <span className="rounded-full bg-amber-100 px-3 py-1 text-xs text-amber-800">
-                            有未保存修改
-                          </span>
-                        ) : (
-                          <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs text-emerald-700">
-                            已同步
-                          </span>
-                        )}
-                        {draftNode.choices.length === 0 && !draftNode.autoNextNodeCode && draftNode.nodeType !== "ending" ? (
-                          <span className="rounded-full bg-rose-100 px-3 py-1 text-xs text-rose-700">当前片段缺出口</span>
-                        ) : null}
-                      </div>
-                      <div className="mt-3 text-lg text-stone-950">{draftNode.title || "未命名片段"}</div>
-                      <div className="mt-1 text-sm text-stone-600">
-                        当前已有 {draftNode.choices.length} 个结尾出口
-                        {draftNode.autoNextNodeCode ? ` · 自动跳转到 ${draftNode.autoNextNodeCode}` : ""}
-                      </div>
+                <div className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full bg-stone-950 px-3 py-1 text-xs text-white">
+                      {draftNode.nodeType === "ending" ? "结局片段" : "视频片段"}
+                    </span>
+                    {selectedNode.code === game.startNodeCode ? (
+                      <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs text-emerald-700">
+                        起始片段
+                      </span>
+                    ) : null}
+                    {nodeDirty ? (
+                      <span className="rounded-full bg-amber-100 px-3 py-1 text-xs text-amber-800">
+                        有未保存修改
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs text-emerald-700">
+                        已同步
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-3 text-lg text-stone-950">{selectedNode.title || "未命名片段"}</div>
+                  <div className="mt-1 text-sm text-stone-500">{selectedNode.code}</div>
+                  <div className="mt-4 grid gap-2 text-xs text-stone-600">
+                    <div className="rounded-2xl border border-stone-900/10 bg-white px-3 py-2">
+                      结尾出口 {draftNode.choices.length} 个
                     </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        className="rounded-full bg-stone-950 px-4 py-2 text-sm text-white transition hover:bg-stone-800 disabled:opacity-50"
-                        onClick={() => void saveNode()}
-                        disabled={saving}
-                      >
-                        {saving ? "保存中..." : "保存出口"}
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-full border border-stone-900/10 px-4 py-2 text-sm text-stone-800 transition hover:border-stone-900/30 disabled:opacity-50"
-                        onClick={() => void duplicateSelectedNode()}
-                        disabled={saving}
-                      >
-                        复制片段
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-full border border-stone-900/10 px-4 py-2 text-sm text-stone-800 transition hover:border-stone-900/30"
-                        onClick={() => setActiveTab("scene")}
-                      >
-                        返回编辑片段
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-full border border-stone-900/10 px-4 py-2 text-sm text-stone-800 transition hover:border-stone-900/30"
-                        onClick={() => setActiveTab("flow")}
-                      >
-                        查看结构图
-                      </button>
+                    <div className="rounded-2xl border border-stone-900/10 bg-white px-3 py-2">
+                      时间线事件 {draftNode.timelineEvents.length} 个
+                    </div>
+                    <div className="rounded-2xl border border-stone-900/10 bg-white px-3 py-2">
+                      {draftNode.videoUrl.trim() ? "已配置视频" : "缺少视频"}
                     </div>
                   </div>
                 </div>
 
-                <HelperCard title="这里和时间线选项的区别">
-                  这里配置的是片段结尾出口，也就是这一段播放结束后玩家能去哪里。视频中途弹出的选项，应该去“编辑片段”里的时间线事件配置。
-                </HelperCard>
-                {draftNode.choices.length ? (
-                  draftNode.choices.map((choice, index) => (
-                    <div
-                      key={`${choice.code}-${index}`}
-                      className="rounded-3xl border border-stone-900/10 bg-stone-50 p-4"
-                    >
-                      <div className="mb-4 flex items-center justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-medium text-stone-900">
-                            {choice.label || `选项 ${index + 1}`}
-                          </div>
-                          <div className="mt-1 text-xs text-stone-500">
-                            {choice.code || "未设置编码"} · {choice.targetNodeCode || "未设置目标片段"}
-                          </div>
-                        </div>
-
-                        <button
-                          type="button"
-                          className="rounded-full border border-rose-200 px-4 py-2 text-sm text-rose-700 transition hover:bg-rose-50"
-                          onClick={() =>
-                            setDraftNode((current) =>
-                              current
-                                ? {
-                                    ...current,
-                                    choices: current.choices.filter((_, entryIndex) => entryIndex !== index),
-                                  }
-                                : current,
-                            )
-                          }
-                        >
-                          删除选项
-                        </button>
-                      </div>
-
-                      <div className="grid gap-4 lg:grid-cols-2">
-                        <Field label="选项编码" visibility="logic">
-                          <input
-                            className={className}
-                            value={choice.code}
-                            onChange={(event) =>
-                              setDraftNode((current) =>
-                                current
-                                  ? {
-                                      ...current,
-                                      choices: current.choices.map((entry, entryIndex) =>
-                                        entryIndex === index ? { ...entry, code: event.target.value } : entry,
-                                      ),
-                                    }
-                                  : current,
-                              )
-                            }
-                          />
-                        </Field>
-
-                        <Field label="目标片段" visibility="logic">
-                          <select
-                            className={className}
-                            value={choice.targetNodeCode}
-                            onChange={(event) =>
-                              setDraftNode((current) =>
-                                current
-                                  ? {
-                                      ...current,
-                                      choices: current.choices.map((entry, entryIndex) =>
-                                        entryIndex === index
-                                          ? { ...entry, targetNodeCode: event.target.value }
-                                          : entry,
-                                      ),
-                                    }
-                                  : current,
-                              )
-                            }
-                          >
-                            <option value="">请选择目标片段</option>
-                            {game.nodes
-                              .filter((node) => node.code !== selectedNodeCode)
-                              .map((node) => (
-                                <option key={node.code} value={node.code}>
-                                  {getNodeDisplayName(game, node.code)}
-                                </option>
-                              ))}
-                          </select>
-                        </Field>
-
-                        <Field label="选项文案" visibility="player">
-                          <input
-                            className={className}
-                            value={choice.label}
-                            onChange={(event) =>
-                              setDraftNode((current) =>
-                                current
-                                  ? {
-                                      ...current,
-                                      choices: current.choices.map((entry, entryIndex) =>
-                                        entryIndex === index ? { ...entry, label: event.target.value } : entry,
-                                      ),
-                                    }
-                                  : current,
-                              )
-                            }
-                          />
-                        </Field>
-
-                        <Field label="补充提示" visibility="player">
-                          <input
-                            className={className}
-                            value={choice.hint}
-                            onChange={(event) =>
-                              setDraftNode((current) =>
-                                current
-                                  ? {
-                                      ...current,
-                                      choices: current.choices.map((entry, entryIndex) =>
-                                        entryIndex === index ? { ...entry, hint: event.target.value } : entry,
-                                      ),
-                                    }
-                                  : current,
-                              )
-                            }
-                          />
-                        </Field>
-                      </div>
-
-                      <div className="mt-4 grid gap-4 xl:grid-cols-2">
-                        {renderConditionEditor(toDraftConditions(choice.conditions), (nextConditions) =>
-                          setDraftNode((current) =>
-                            current
-                              ? {
-                                  ...current,
-                                  choices: current.choices.map((entry, entryIndex) =>
-                                    entryIndex === index
-                                      ? {
-                                          ...entry,
-                                          conditions: toConditionPayload(nextConditions, gameForm.variables),
-                                        }
-                                      : entry,
-                                  ),
-                                }
-                              : current,
-                          ),
-                        )}
-
-                        {renderActionEditor(toDraftActions(choice.actions), (nextActions) =>
-                          setDraftNode((current) =>
-                            current
-                              ? {
-                                  ...current,
-                                  choices: current.choices.map((entry, entryIndex) =>
-                                    entryIndex === index
-                                      ? {
-                                          ...entry,
-                                          actions: toActionPayload(nextActions, gameForm.variables),
-                                        }
-                                      : entry,
-                                  ),
-                                }
-                              : current,
-                          ),
-                        )}
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="rounded-3xl border border-dashed border-stone-900/15 px-4 py-8 text-sm leading-7 text-stone-600">
-                    当前片段还没有结尾选项。
-                  </div>
-                )}
-
-                <div className="rounded-3xl border border-stone-900/10 bg-white p-4">
-                  <div className="mb-4 text-sm font-medium text-stone-900">新增出口</div>
-                  <div className="grid gap-4 lg:grid-cols-2">
-                    <Field label="新选项编码" hint="可留空，系统会自动生成。" visibility="logic">
-                      <input
-                        className={className}
-                        value={newChoiceForm.code}
-                        onChange={(event) =>
-                          setNewChoiceForm((current) => ({ ...current, code: event.target.value }))
-                        }
-                      />
-                    </Field>
-
-                    <Field label="目标片段" visibility="logic">
-                      <select
-                        className={className}
-                        value={newChoiceForm.targetNodeCode}
-                        onChange={(event) =>
-                          setNewChoiceForm((current) => ({ ...current, targetNodeCode: event.target.value }))
-                        }
-                      >
-                        <option value="">请选择目标片段</option>
-                        {game.nodes
-                          .filter((node) => node.code !== selectedNodeCode)
-                          .map((node) => (
-                            <option key={node.code} value={node.code}>
-                              {getNodeDisplayName(game, node.code)}
-                            </option>
-                          ))}
-                      </select>
-                    </Field>
-
-                    <Field label="选项文案" visibility="player">
-                      <input
-                        className={className}
-                        value={newChoiceForm.label}
-                        onChange={(event) =>
-                          setNewChoiceForm((current) => ({ ...current, label: event.target.value }))
-                        }
-                      />
-                    </Field>
-
-                    <Field label="补充提示" visibility="player">
-                      <input
-                        className={className}
-                        value={newChoiceForm.hint}
-                        onChange={(event) =>
-                          setNewChoiceForm((current) => ({ ...current, hint: event.target.value }))
-                        }
-                      />
-                    </Field>
-                  </div>
-
-                  <div className="mt-4">
-                    <button
-                      type="button"
-                      className="rounded-full border border-stone-900/10 px-4 py-2 text-sm text-stone-800 transition hover:border-stone-900/30"
-                      onClick={() =>
-                        setDraftNode((current) => {
-                          if (!current) {
-                            return current;
-                          }
-
-                          const label = newChoiceForm.label.trim();
-                          const targetNodeCode = newChoiceForm.targetNodeCode.trim();
-
-                          if (!label || !targetNodeCode) {
-                            setError("新增选项至少需要文案和目标片段");
-                            return current;
-                          }
-
-                          setError(null);
-
-                          return {
-                            ...current,
-                            choices: [
-                              ...current.choices,
-                              {
-                                code: newChoiceForm.code.trim() || buildId("choice"),
-                                label,
-                                hint: newChoiceForm.hint.trim(),
-                                targetNodeCode,
-                                conditions: [],
-                                actions: [],
-                              },
-                            ],
-                          };
-                        })
-                      }
-                    >
-                      加入当前片段
-                    </button>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap gap-3">
+                <div className="grid gap-2">
                   <button
                     type="button"
                     className="rounded-full bg-stone-950 px-4 py-3 text-sm text-white transition hover:bg-stone-800 disabled:opacity-50"
                     onClick={() => void saveNode()}
                     disabled={saving}
                   >
-                    保存选项配置
+                    {saving ? "保存中..." : "保存当前片段"}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-full border border-stone-900/10 px-4 py-3 text-sm text-stone-800 transition hover:border-stone-900/30"
+                    onClick={openPreviewFromSelectedNode}
+                  >
+                    试玩当前片段
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-full border border-stone-900/10 px-4 py-3 text-sm text-stone-800 transition hover:border-stone-900/30 disabled:opacity-50"
+                    onClick={() => void duplicateSelectedNode()}
+                    disabled={saving}
+                  >
+                    复制当前片段
+                  </button>
+                  {!selectedNode.isEnding && selectedNode.code !== game.startNodeCode ? (
+                    <button
+                      type="button"
+                      className="rounded-full border border-emerald-200 px-4 py-3 text-sm text-emerald-700 transition hover:bg-emerald-50 disabled:opacity-50"
+                      onClick={() => void setStartNode(selectedNode.code)}
+                      disabled={saving}
+                    >
+                      设为起始片段
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="rounded-full border border-rose-200 px-4 py-3 text-sm text-rose-700 transition hover:bg-rose-50 disabled:opacity-50"
+                    onClick={() => void deleteSelectedNode()}
+                    disabled={saving || game.nodes.length <= 1}
+                  >
+                    删除当前片段
                   </button>
                 </div>
+
+                {!selectedNode.isEnding ? (
+                  <div ref={quickLinkComposerRef} className="rounded-2xl border border-stone-900/10 bg-white p-4">
+                    <div className="text-sm font-medium text-stone-900">从当前片段继续创作</div>
+                    <div className="mt-1 text-xs leading-6 text-stone-500">
+                      直接创建下一个片段，并自动接到当前片段上。
+                    </div>
+
+                    <div className="mt-4 grid gap-4">
+                      <Field label="新片段标题" visibility="player">
+                        <input
+                          className={className}
+                          value={quickLinkForm.title}
+                          onChange={(event) =>
+                            setQuickLinkForm((current) => ({ ...current, title: event.target.value }))
+                          }
+                          placeholder="如 监控室 / 车库出口 / 结局B"
+                        />
+                      </Field>
+
+                      <div className="grid gap-4 lg:grid-cols-2">
+                        <Field label="新片段编码" hint="可留空，系统自动生成" visibility="logic">
+                          <input
+                            className={className}
+                            value={quickLinkForm.code}
+                            onChange={(event) =>
+                              setQuickLinkForm((current) => ({ ...current, code: event.target.value }))
+                            }
+                            placeholder="如 monitor_room"
+                          />
+                        </Field>
+
+                        <Field label="新片段类型" visibility="logic">
+                          <select
+                            className={className}
+                            value={quickLinkForm.nodeType}
+                            onChange={(event) =>
+                              setQuickLinkForm((current) => ({
+                                ...current,
+                                nodeType: event.target.value as "video" | "ending",
+                              }))
+                            }
+                          >
+                            {Object.entries(nodeTypeLabel).map(([value, label]) => (
+                              <option key={value} value={value}>
+                                {label}
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+                      </div>
+
+                      <Field
+                        label="连接方式"
+                        hint="自动跳转适合直接接下一幕；分支选项适合玩家做选择。"
+                        visibility="logic"
+                      >
+                        <div className="flex flex-wrap gap-2">
+                          {([
+                            { id: "choice", label: "作为新选项分支" },
+                            { id: "auto", label: "作为自动跳转下一幕" },
+                          ] as const).map((mode) => (
+                            <button
+                              key={mode.id}
+                              type="button"
+                              className={`rounded-full px-3 py-2 text-sm transition ${
+                                quickLinkForm.linkMode === mode.id
+                                  ? "bg-stone-950 text-white"
+                                  : "border border-stone-900/10 bg-stone-50 text-stone-700 hover:border-stone-900/30"
+                              }`}
+                              onClick={() =>
+                                setQuickLinkForm((current) => ({
+                                  ...current,
+                                  linkMode: mode.id,
+                                }))
+                              }
+                            >
+                              {mode.label}
+                            </button>
+                          ))}
+                        </div>
+                      </Field>
+
+                      {quickLinkForm.linkMode === "choice" ? (
+                        <div className="grid gap-4 lg:grid-cols-2">
+                          <Field label="选项文案" visibility="player">
+                            <input
+                              className={className}
+                              value={quickLinkForm.choiceLabel}
+                              onChange={(event) =>
+                                setQuickLinkForm((current) => ({
+                                  ...current,
+                                  choiceLabel: event.target.value,
+                                }))
+                              }
+                              placeholder="如 进去看看 / 转身离开"
+                            />
+                          </Field>
+
+                          <Field label="选项提示" visibility="player">
+                            <input
+                              className={className}
+                              value={quickLinkForm.choiceHint}
+                              onChange={(event) =>
+                                setQuickLinkForm((current) => ({
+                                  ...current,
+                                  choiceHint: event.target.value,
+                                }))
+                              }
+                              placeholder="可留空"
+                            />
+                          </Field>
+                        </div>
+                      ) : (
+                        <div className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-3 text-sm leading-7 text-stone-600">
+                          保存后，当前片段会在播放结束时自动进入新片段。
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        className="rounded-full bg-stone-950 px-4 py-3 text-sm text-white transition hover:bg-stone-800 disabled:opacity-50"
+                        onClick={() => void createLinkedNodeFromSelected()}
+                        disabled={saving}
+                      >
+                        创建并连接新片段
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ) : (
-              <div className="rounded-3xl border border-dashed border-stone-900/15 px-4 py-8 text-sm leading-7 text-stone-600">
-                先创建或选择一个片段，再编辑它的分支出口。
+              <div className="rounded-2xl border border-dashed border-stone-900/12 px-4 py-6 text-sm leading-7 text-stone-500">
+                先从左侧片段导航中选择一个片段。
               </div>
             )}
           </Panel>
-        </div>
 
-        <div className="grid gap-5">
-          <Panel
-            eyebrow="Summary"
-            title="出口摘要"
-            description="这里汇总当前片段出口设计的复杂度和风险。"
-          >
-            <div className="grid gap-3 text-sm text-stone-700">
-              <div className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-3">
-                结尾出口：{draftNode?.choices.length ?? 0}
-              </div>
-              <div className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-3">
-                条件总数：
-                {draftNode?.choices.reduce((count, choice) => count + choice.conditions.length, 0) ?? 0}
-              </div>
-              <div className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-3">
-                动作总数：
-                {draftNode?.choices.reduce((count, choice) => count + choice.actions.length, 0) ?? 0}
-              </div>
-              <div className="rounded-2xl border border-stone-900/10 bg-stone-50 px-4 py-3 leading-7">
-                最常用的仍然是：选项文案 + 目标片段。条件和动作属于进阶规则，没有需要时可以先不填。
-              </div>
-            </div>
-          </Panel>
-
-          <Panel
-            eyebrow="Refresh"
-            title="同步数据"
-            description="如果你怀疑界面状态与数据库不同步，可以手动刷新。"
-          >
-            <button
-              type="button"
-              className="rounded-full border border-stone-900/10 px-4 py-3 text-sm text-stone-800 transition hover:border-stone-900/30 disabled:opacity-50"
-              onClick={() => void loadGame(selectedNodeCode)}
-              disabled={loading}
-            >
-              {loading ? "刷新中..." : "重新加载项目"}
-            </button>
-          </Panel>
         </div>
       </div>
     );
@@ -4396,33 +4772,54 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
       return renderProjectWorkspace();
     }
 
-    if (activeTab === "assets") {
-      return renderAssetsWorkspace();
-    }
-
-    if (activeTab === "flow") {
-      return renderFlowWorkspace();
-    }
-
-    if (activeTab === "scene") {
-      return renderSceneWorkspace();
-    }
-
-    return renderChoicesWorkspace();
+    return renderFlowWorkspace();
   }
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(245,158,11,0.08),_transparent_26%),linear-gradient(180deg,_#f7f3ee_0%,_#f3efe8_100%)] text-stone-900">
       <div className="mx-auto max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8">
         <div className="grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">
-          <aside className="xl:sticky xl:top-6 xl:h-[calc(100vh-3rem)]">
-            <div className="flex h-full flex-col gap-4 rounded-[2rem] border border-stone-900/10 bg-white/72 p-4 shadow-[0_24px_80px_rgba(52,38,25,0.08)] backdrop-blur-xl">
+          <aside className="xl:sticky xl:top-6 xl:self-start">
+            <div className="flex gap-4 rounded-[2rem] border border-stone-900/10 bg-white/72 p-4 shadow-[0_24px_80px_rgba(52,38,25,0.08)] backdrop-blur-xl xl:max-h-[calc(100vh-3rem)] xl:flex-col">
               <div className="rounded-[1.75rem] border border-stone-900/10 bg-[linear-gradient(135deg,rgba(255,251,235,0.92),rgba(255,255,255,0.92))] px-4 py-4">
-                <div className="text-[11px] uppercase tracking-[0.38em] text-stone-500">Storyplay Studio</div>
-                <div className="mt-3 text-xl text-stone-950">{game.title || "未命名互动影游项目"}</div>
+                <div className="text-[11px] uppercase tracking-[0.38em] text-stone-500">StoryPlay Studio</div>
+                <div className="mt-3 text-xl text-stone-950">{game.title || "未命名 StoryPlay 项目"}</div>
                 <p className="mt-2 text-sm leading-7 text-stone-700">
                   {game.tagline || "先完成项目配置，再开始搭建剧情与片段内容。"}
                 </p>
+                <div className="mt-4 grid gap-3">
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.28em] text-stone-500">当前管理项目</div>
+                    <select
+                      className="mt-2 w-full rounded-2xl border border-stone-900/10 bg-white px-3 py-3 text-sm outline-none transition focus:border-stone-500"
+                      value={currentProjectSlug}
+                      onChange={(event) => switchProject(event.target.value)}
+                    >
+                      {orderedProjects.map((project) => (
+                        <option key={project.slug} value={project.slug}>
+                          {project.title} / {project.slug}{project.listedOnHome ? "" : " / 已隐藏"}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="rounded-full bg-stone-950 px-4 py-2 text-sm text-white transition hover:bg-stone-800 disabled:opacity-50"
+                      onClick={() => void createProjectEntry()}
+                      disabled={creatingProject}
+                    >
+                      {creatingProject ? "创建中..." : "新建项目"}
+                    </button>
+                    <Link
+                      href="/"
+                      className="rounded-full border border-stone-900/10 px-4 py-2 text-sm text-stone-800 transition hover:border-stone-900/30"
+                    >
+                      前台大厅
+                    </Link>
+                  </div>
+                </div>
               </div>
 
               <div className="rounded-[1.5rem] border border-stone-900/10 bg-white/88 p-3">
@@ -4451,7 +4848,7 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
                 </div>
               </div>
 
-              <div className="min-h-0 flex-1 rounded-[1.5rem] border border-stone-900/10 bg-white/88 p-3">
+              <div className="rounded-[1.5rem] border border-stone-900/10 bg-white/88 p-3 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <div className="text-[11px] uppercase tracking-[0.3em] text-stone-500">片段导航</div>
@@ -4460,7 +4857,7 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
                   <button
                     type="button"
                     className="rounded-full border border-stone-900/10 px-3 py-1.5 text-xs text-stone-700 transition hover:border-stone-900/30"
-                    onClick={() => setActiveTab("flow")}
+                    onClick={openFlowComposer}
                   >
                     新建片段
                   </button>
@@ -4498,6 +4895,7 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
                       { id: "issues", label: "仅问题" },
                       { id: "start", label: "起始" },
                       { id: "ending", label: "结局" },
+                      { id: "isolated", label: "孤立" },
                     ] as const).map((filter) => (
                       <button
                         key={filter.id}
@@ -4515,7 +4913,7 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
                   </div>
                 </div>
 
-                <div className="mt-3 max-h-[42vh] overflow-y-auto pr-1">
+                <div className="mt-3 xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1">
                   {filteredNodeEntries.length ? (
                     <div className="grid gap-3">
                       {(nodeNavigationMode === "chapter"
@@ -4535,7 +4933,7 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
                             <div className="px-1 text-[11px] uppercase tracking-[0.28em] text-stone-500">
                               {group.label}
                             </div>
-                            {group.entries.map(({ node, isStart, isEnding, issues, issueCount }) => {
+                            {group.entries.map(({ node, isStart, isEnding, isIsolated, incomingCount, playerScene, issues, issueCount }) => {
                               const isSelected = node.code === selectedNodeCode;
                               return (
                                 <div
@@ -4562,7 +4960,7 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
                                       </span>
                                     </div>
                                     <div className={`mt-1 text-xs ${isSelected ? "text-stone-300" : "text-stone-500"}`}>
-                                      {node.code}
+                                      {node.code} · 入口 {incomingCount}
                                     </div>
                                     <div className="mt-2 flex flex-wrap gap-1.5">
                                       {isStart ? (
@@ -4570,8 +4968,20 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
                                           起始
                                         </span>
                                       ) : null}
+                                      <span
+                                        className={`rounded-full px-2 py-0.5 text-[10px] ${
+                                          isSelected ? "bg-white/10 text-white/75" : playerScene.badgeClassName
+                                        }`}
+                                      >
+                                        {playerScene.label}
+                                      </span>
+                                      {isIsolated ? (
+                                        <span className={`rounded-full px-2 py-0.5 text-[10px] ${isSelected ? "bg-rose-300/15 text-rose-100" : "bg-rose-100 text-rose-700"}`}>
+                                          孤立
+                                        </span>
+                                      ) : null}
                                       {issueCount > 0
-                                        ? issues.map((issue) => (
+                                        ? issues.filter((issue) => issue !== "孤立片段").map((issue) => (
                                             <span
                                               key={`${node.code}-${issue}`}
                                               className={`rounded-full px-2 py-0.5 text-[10px] ${
@@ -4593,20 +5003,9 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
                                           ? "border border-white/12 bg-white/6 text-white/85 hover:bg-white/10"
                                           : "border border-stone-900/10 bg-white text-stone-700 hover:border-stone-900/30"
                                       }`}
-                                      onClick={() => focusNode(node.code, "scene")}
+                                      onClick={() => focusNode(node.code, "flow")}
                                     >
                                       编辑
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className={`rounded-full px-3 py-1.5 text-[11px] transition ${
-                                        isSelected
-                                          ? "border border-white/12 bg-white/6 text-white/85 hover:bg-white/10"
-                                          : "border border-stone-900/10 bg-white text-stone-700 hover:border-stone-900/30"
-                                      }`}
-                                      onClick={() => focusNode(node.code, "choices")}
-                                    >
-                                      出口
                                     </button>
                                     {!isStart ? (
                                       <button
@@ -4664,7 +5063,7 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
 
           <main className="min-w-0">
             <section className="rounded-[2rem] border border-stone-900/10 bg-white/72 p-5 shadow-[0_24px_80px_rgba(52,38,25,0.08)] backdrop-blur-xl">
-              <div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_360px]">
+              <div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_360px] xl:items-start">
                 <div className="rounded-[1.75rem] border border-stone-900/10 bg-[linear-gradient(135deg,rgba(255,251,235,0.92),rgba(255,255,255,0.9))] px-5 py-5">
                   <div className="text-[11px] uppercase tracking-[0.3em] text-amber-800">当前工作区</div>
                 <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -4678,7 +5077,7 @@ export function AdminStoryEditor({ initialGame }: AdminStoryEditorProps) {
                   <p className="mt-2 text-sm leading-7 text-stone-600">{activeWorkspace.hint}</p>
                   {selectedNode ? (
                     <div className="mt-4 rounded-[1.3rem] border border-white/60 bg-white/65 px-4 py-3 text-sm text-stone-700">
-                      当前聚焦片段：<span className="font-medium text-stone-950">{selectedNode.title}</span>
+                      当前编辑片段：<span className="font-medium text-stone-950">{selectedNode.title}</span>
                     </div>
                   ) : null}
                 </div>

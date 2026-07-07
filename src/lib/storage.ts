@@ -1,151 +1,112 @@
-import type {
-  PlaythroughState,
-  StoryChoice,
-  StoryGame,
-  StoryNode,
-  VariableDefinition,
-} from "@/lib/story-engine";
+import type { PlaythroughState, ProjectSummary, StoryGame } from "@/lib/story-engine";
 import {
-  createPlaythroughRecordInPostgres,
+  createProjectSeed,
+  summarizeProject,
+} from "@/lib/project-utils";
+import {
   getPostgresConnectionLabel,
-  insertChoiceRecordInPostgres,
-  insertNodeRecordInPostgres,
-  loadGameFromPostgres,
+  initializePostgres,
   loadPlaythroughFromPostgres,
-  persistGameMetaInPostgres,
-  replaceChoiceLogsInPostgres,
-  resetPostgresToSeed,
-  updateNodeRecordInPostgres,
-  updatePlaythroughRecordInPostgres,
+  upsertPlaythroughInPostgres,
+  listProjectsFromPostgres,
+  loadProjectFromPostgres,
+  saveProjectToPostgres,
+  deleteProjectFromPostgres,
 } from "@/lib/postgres";
 import {
-  createPlaythroughRecord,
   getDbFilePath,
-  insertChoiceRecord,
-  insertNodeRecord,
-  loadGameFromDb,
   loadPlaythrough,
-  persistGameMeta,
-  replaceChoiceLogs,
-  resetDatabaseToSeed,
-  updateNodeRecord,
-  updatePlaythroughRecord,
+  upsertPlaythrough,
+  listProjectsFromDb,
+  loadProjectFromDb,
+  saveProjectToDb,
+  deleteProjectFromDb,
 } from "@/lib/sqlite";
 
 function shouldUsePostgres() {
   return Boolean(process.env.DATABASE_URL?.trim());
 }
 
-export async function loadGame(): Promise<StoryGame> {
-  return shouldUsePostgres() ? loadGameFromPostgres() : loadGameFromDb();
+export async function listProjects(): Promise<ProjectSummary[]> {
+  if (shouldUsePostgres()) {
+    await initializePostgres();
+    return listProjectsFromPostgres();
+  }
+
+  return listProjectsFromDb();
 }
 
-export async function replaceGame(game: StoryGame) {
+export async function loadProject(slug?: string): Promise<StoryGame> {
   if (shouldUsePostgres()) {
-    await resetPostgresToSeed(game);
+    await initializePostgres();
+    return loadProjectFromPostgres(slug);
+  }
+
+  return loadProjectFromDb(slug);
+}
+
+export async function createProject(input?: Partial<StoryGame>) {
+  const project = createProjectSeed(input);
+
+  if (shouldUsePostgres()) {
+    await initializePostgres();
+    await saveProjectToPostgres(project);
+  } else {
+    saveProjectToDb(project);
+  }
+
+  return project;
+}
+
+export async function saveProject(game: StoryGame) {
+  if (shouldUsePostgres()) {
+    await initializePostgres();
+    await saveProjectToPostgres(game);
     return;
   }
 
-  resetDatabaseToSeed(game);
+  saveProjectToDb(game);
 }
 
-export async function persistGame(input: {
-  title?: string;
-  tagline?: string;
-  intro?: string;
-  promoVideoUrl?: string;
-  promoPosterUrl?: string;
-  promoText?: string;
-  startNodeCode?: string;
-  variables?: VariableDefinition[];
-}) {
+export async function removeProject(slug: string) {
   if (shouldUsePostgres()) {
-    await persistGameMetaInPostgres(input);
+    await initializePostgres();
+    await deleteProjectFromPostgres(slug);
     return;
   }
 
-  persistGameMeta(input);
+  deleteProjectFromDb(slug);
 }
 
-export async function insertNode(node: StoryNode) {
+export async function ensureProject(slug?: string) {
+  const projects = await listProjects();
+
+  if (!projects.length) {
+    const created = await createProject();
+    return created;
+  }
+
+  return loadProject(slug ?? projects[0]?.slug);
+}
+
+export async function upsertPlaythroughForStorage(session: PlaythroughState) {
   if (shouldUsePostgres()) {
-    await insertNodeRecordInPostgres(node);
+    await initializePostgres();
+    await upsertPlaythroughInPostgres(session);
     return;
   }
 
-  insertNodeRecord(node);
-}
-
-export async function updateNode(node: StoryNode) {
-  if (shouldUsePostgres()) {
-    await updateNodeRecordInPostgres(node);
-    return;
-  }
-
-  updateNodeRecord(node);
-}
-
-export async function insertChoice(nodeCode: string, choice: StoryChoice) {
-  if (shouldUsePostgres()) {
-    await insertChoiceRecordInPostgres(nodeCode, choice);
-    return;
-  }
-
-  insertChoiceRecord(nodeCode, choice);
-}
-
-export async function createPlaythroughRecordForStorage(input: {
-  id: string;
-  gameSlug: string;
-  currentNodeCode: string;
-  status: "in_progress" | "completed";
-  startedAt: string;
-  finishedAt?: string;
-  variables?: PlaythroughState["variables"];
-  triggeredEventIds?: string[];
-}) {
-  if (shouldUsePostgres()) {
-    await createPlaythroughRecordInPostgres(input);
-    return;
-  }
-
-  createPlaythroughRecord(input);
-}
-
-export async function updatePlaythroughRecordForStorage(session: PlaythroughState) {
-  if (shouldUsePostgres()) {
-    await updatePlaythroughRecordInPostgres(session);
-    return;
-  }
-
-  updatePlaythroughRecord(session);
-}
-
-export async function replaceChoiceLogsForStorage(
-  playthroughId: string,
-  history: PlaythroughState["history"],
-) {
-  if (shouldUsePostgres()) {
-    await replaceChoiceLogsInPostgres(playthroughId, history);
-    return;
-  }
-
-  replaceChoiceLogs(playthroughId, history);
+  upsertPlaythrough(session);
 }
 
 export async function loadPlaythroughFromStorage(playthroughId: string) {
   return shouldUsePostgres() ? loadPlaythroughFromPostgres(playthroughId) : loadPlaythrough(playthroughId);
 }
 
-export async function resetStorageToSeed(game: StoryGame) {
-  if (shouldUsePostgres()) {
-    await resetPostgresToSeed(game);
-    return;
-  }
-
-  resetDatabaseToSeed(game);
-}
-
 export function getStorageLabel() {
   return shouldUsePostgres() ? getPostgresConnectionLabel() : getDbFilePath();
+}
+
+export function toProjectSummary(game: StoryGame, updatedAt: string) {
+  return summarizeProject(game, updatedAt);
 }

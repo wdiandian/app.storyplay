@@ -13,7 +13,7 @@ export async function GET(
   try {
     const { session, node } = await getCurrentNode(playthroughId);
 
-    return Response.json(serializePlaythrough(await getGame(), session, node));
+    return Response.json(serializePlaythrough(await getGame(session.gameSlug), session, node));
   } catch (error) {
     return Response.json(
       {
