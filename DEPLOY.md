@@ -1,4 +1,4 @@
-# storyplay.cc deployment
+# app.storyplay.cc deployment
 
 This project is deployed with:
 
@@ -29,8 +29,8 @@ pm2 -v
 Prepare the target directory:
 
 ```bash
-sudo mkdir -p /var/www/storyplay
-sudo chown -R $USER:$USER /var/www/storyplay
+sudo mkdir -p /var/www/storyplay-app
+sudo chown -R $USER:$USER /var/www/storyplay-app
 ```
 
 For the first release only, upload or clone the repository.
@@ -38,9 +38,9 @@ For the first release only, upload or clone the repository.
 Recommended approach:
 
 ```bash
-cd /var/www/storyplay
-git clone https://github.com/wdiandian/storyplay.git app
-cd /var/www/storyplay/app
+cd /var/www/storyplay-app
+git clone https://github.com/wdiandian/app.storyplay.git app
+cd /var/www/storyplay-app/app
 npm ci
 npm run build
 pm2 start ecosystem.config.cjs
@@ -70,7 +70,7 @@ When `DATABASE_URL` is present:
 If you already have data in SQLite, import it once:
 
 ```bash
-cd /var/www/storyplay/app
+cd /var/www/storyplay-app/app
 DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DBNAME npm run db:import:sqlite
 ```
 
@@ -80,17 +80,16 @@ Check status:
 
 ```bash
 pm2 status
-pm2 logs storyplay
+pm2 logs storyplay-app
 ```
 
 ## 3. Cloudflare DNS
 
 Create these records in Cloudflare:
 
-- `A` record: `@` -> server public IP
-- `CNAME` record: `www` -> `storyplay.cc`
+- `A` record: `app` -> server public IP
 
-Enable the orange cloud proxy on both records.
+Enable the orange cloud proxy on the record.
 
 ## 4. Cloudflare origin certificate
 
@@ -102,8 +101,7 @@ In Cloudflare:
 
 Hostnames:
 
-- `storyplay.cc`
-- `*.storyplay.cc`
+- `app.storyplay.cc`
 
 Save them on the server:
 
@@ -119,8 +117,8 @@ sudo chmod 600 /etc/ssl/private/storyplay-origin.key
 Install the site config:
 
 ```bash
-sudo cp /var/www/storyplay/app/nginx/storyplay.conf /etc/nginx/sites-available/storyplay
-sudo ln -sf /etc/nginx/sites-available/storyplay /etc/nginx/sites-enabled/storyplay
+sudo cp /var/www/storyplay-app/app/nginx/storyplay.conf /etc/nginx/sites-available/storyplay-app
+sudo ln -sf /etc/nginx/sites-available/storyplay-app /etc/nginx/sites-enabled/storyplay-app
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t
 sudo systemctl reload nginx
@@ -146,7 +144,7 @@ git push origin master
 Server deploy:
 
 ```bash
-cd /var/www/storyplay/app
+cd /var/www/storyplay-app/app
 bash scripts/deploy-update.sh
 ```
 
@@ -156,14 +154,14 @@ The update script does:
 - `git reset --hard origin/master`
 - `npm ci`
 - `npm run build`
-- `pm2 restart storyplay`
+- `pm2 restart storyplay-app`
 - `pm2 save`
 
 ## 8. Troubleshooting
 
 ```bash
 pm2 status
-pm2 logs storyplay
+pm2 logs storyplay-app
 sudo systemctl status nginx
 sudo tail -f /var/log/nginx/error.log
 sudo tail -f /var/log/nginx/access.log
@@ -174,13 +172,13 @@ sudo tail -f /var/log/nginx/access.log
 SQLite file fallback:
 
 ```bash
-/var/www/storyplay/app/data/app.db
+/var/www/storyplay-app/app/data/app.db
 ```
 
 Backup:
 
 ```bash
-cp /var/www/storyplay/app/data/app.db /var/www/storyplay/app/data/app.db.bak
+cp /var/www/storyplay-app/app/data/app.db /var/www/storyplay-app/app/data/app.db.bak
 ```
 
 PostgreSQL backup should be done from the database provider side or with `pg_dump`.
