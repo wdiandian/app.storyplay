@@ -67,6 +67,17 @@ export type StoryChoice = {
   actions?: VariableAction[];
 };
 
+export type StoryRecord = {
+  id: string;
+  recordType: "memory" | "clue" | "echo";
+  title: string;
+  body: string;
+  lockedLabel?: string;
+  visibleWhenLocked?: boolean;
+  unlockNodeCodes?: string[];
+  unlockChoiceCodes?: string[];
+};
+
 export type StoryNode = {
   code: string;
   title: string;
@@ -94,6 +105,8 @@ export type StoryGame = {
   promoText: string;
   startNodeCode: string;
   variables?: VariableDefinition[];
+  records?: StoryRecord[];
+  authoringGraph?: unknown;
   nodes: StoryNode[];
 };
 

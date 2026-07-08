@@ -1,36 +1,45 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# StoryPlay App
 
-## Getting Started
+StoryPlay App 是部署在 `app.storyplay.cc` 的附属互动影游项目。
 
-First, run the development server:
+它与主站 AI 实时生成项目分开维护。本项目聚焦“手工制作的分支影游”和“创作后台”：
+
+- 创作者在创作后台编辑游戏；
+- 玩家在首页发现已展示的游戏；
+- 玩家进入播放页，通过视频节点和分支选择完成一次游玩。
+
+## 主要板块
+
+- 首页：`/`
+- 播放页：`/projects/[slug]`
+- 创作后台：`/admin`
+- 当前项目编辑入口：`/admin?project=[slug]`
+
+## 本地开发
 
 ```bash
+npm ci
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 验证
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run build
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 部署
 
-## Learn More
+部署说明见 [DEPLOY.md](./DEPLOY.md)。
 
-To learn more about Next.js, take a look at the following resources:
+当前线上服务：
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- 域名：`app.storyplay.cc`
+- PM2 进程：`storyplay-app`
+- 本机端口：`3001`
+- 服务器目录：`/var/www/storyplay-app/app`
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 文档
 
-## Deploy on Vercel
+从 [docs/README.md](./docs/README.md) 开始阅读。
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.

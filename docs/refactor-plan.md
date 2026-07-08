@@ -1,107 +1,106 @@
-# StoryPlay App Refactor Plan
+# 重构计划
 
-## 1. Product Boundary
+## 1. 产品边界
 
-This project is the attached StoryPlay app, separate from the main AI-first `infiplot` site.
+本项目是附属的 StoryPlay App，与主站 AI 实时生成项目分开维护。
 
-Its core product loop is:
+核心产品闭环：
 
-1. Creators edit games in the creator studio.
-2. Players discover games on the home page.
-3. Players enter the play page and play through a selected game.
+1. 创作者在创作后台编辑游戏。
+2. 玩家在首页发现游戏。
+3. 玩家进入播放页游玩指定游戏。
 
-The project should be organized around four areas:
+项目按四个板块组织：
 
-- Home: game discovery.
-- Play page: game runtime and player experience.
-- Creator studio: game editing and publishing.
-- Infrastructure: data model, APIs, storage, uploads, deployment, validation, and future permissions.
+- 首页：游戏发现。
+- 播放页：游戏运行时和玩家体验。
+- 创作后台：游戏编辑和发布。
+- 基建：数据模型、API、存储、上传、部署、校验和未来权限。
 
-## 2. Current Routes
+## 2. 当前路由
 
-Current implemented routes:
+已实现路由：
 
-- `/`: home page, lists projects with `listedOnHome`.
-- `/projects/[slug]`: play page, starts the interactive player for one project.
-- `/admin`: creator studio project overview.
-- `/admin?project=[slug]`: creator studio editor for one project.
+- `/`：首页，展示 `listedOnHome` 的项目。
+- `/projects/[slug]`：播放页，启动指定项目的播放器。
+- `/admin`：创作后台项目总览。
+- `/admin?project=[slug]`：指定项目的编辑器。
 
-Target route direction:
+目标路由方向：
 
-- `/`: public game discovery.
-- `/projects/[slug]`: public play page.
-- `/admin`: creator studio project overview.
-- `/admin/projects/[slug]`: project editor.
+- `/`：公开游戏发现。
+- `/projects/[slug]`：公开播放页。
+- `/admin`：创作后台项目总览。
+- `/admin/projects/[slug]`：项目编辑器。
 
-Keep `/admin?project=[slug]` temporarily for compatibility while migrating.
+迁移期间保留 `/admin?project=[slug]` 兼容。
 
-## 3. Home Page
+## 3. 首页
 
-Responsibility:
+职责：
 
-- Show playable/published games.
-- Present title, tagline, poster, promo video, and entry actions.
-- Keep creator/admin actions secondary.
+- 展示可玩或已发布游戏。
+- 呈现标题、简介、海报、宣传视频和进入操作。
+- 弱化创作者/管理入口。
 
-Home should use project summary data only. It should not load the full game graph.
+首页只使用项目摘要数据，不加载完整游戏图。
 
-Current source:
+当前来源：
 
 - `src/app/page.tsx`
 - `listProjectSummaries()`
 - `ProjectSummary`
 
-Future fields to consider:
+后续可考虑字段：
 
-- `visibility`: `public | unlisted | private`
-- `publishStatus`: `draft | published`
+- `visibility`：`public | unlisted | private`
+- `publishStatus`：`draft | published`
 - `category`
 - `tags`
 - `coverUrl`
 - `publishedAt`
 - `playCount`
 
-## 4. Play Page
+## 4. 播放页
 
-Responsibility:
+职责：
 
-- Load one game by slug.
-- Create and resume playthrough state.
-- Render the current node.
-- Handle choices, automatic transitions, timeline events, conditions, actions, and endings.
-- Keep runtime errors understandable for players.
+- 按 slug 加载一个游戏。
+- 创建或恢复游玩状态。
+- 渲染当前节点。
+- 处理选择、自动跳转、时间线事件、条件、动作和结局。
+- 为玩家提供可理解的错误状态。
 
-Current source:
+当前来源：
 
 - `src/app/projects/[slug]/page.tsx`
 - `src/components/interactive-player.tsx`
 - `src/lib/playthrough-store.ts`
 - `src/lib/story-rules.ts`
 
-Important future boundary:
+重要边界：
 
-- Players should eventually play a published version of a game, not the mutable draft.
-- Creator preview can continue to use draft data.
+- 玩家后续应游玩“已发布版本”，而不是实时变化的草稿。
+- 创作者预览可以继续使用草稿数据。
 
-## 5. Creator Studio
+## 5. 创作后台
 
-Responsibility:
+职责：
 
-- Manage projects.
-- Edit project settings and presentation.
-- Edit nodes, branches, variables, conditions, timeline events, and endings.
-- Import/export projects.
-- Validate a project before it is exposed on the home page.
+- 管理项目。
+- 编辑项目设置和展示信息。
+- 编辑节点、分支、变量、条件、时间线事件和结局。
+- 导入/导出项目。
+- 在项目展示到首页前做发布检查。
 
-Current source:
+当前来源：
 
 - `src/app/admin/page.tsx`
 - `src/components/admin-project-overview.tsx`
-- `src/components/admin-story-editor.tsx`
-- `src/components/branch-graph.tsx`
+- `src/components/admin-canvas-editor.tsx`
 - `src/app/api/admin/*`
 
-Target component split:
+目标组件拆分：
 
 - `components/admin/project-overview.tsx`
 - `components/admin/project-settings-panel.tsx`
@@ -113,38 +112,38 @@ Target component split:
 - `components/admin/publish-checklist.tsx`
 - `components/admin/import-export-panel.tsx`
 
-Publishing checks should include:
+发布检查应包括：
 
-- A start node exists.
-- Every choice target exists.
-- Every auto-next target exists.
-- Ending nodes are complete.
-- Required video URLs or media assets exist.
-- Condition variables exist.
-- Timeline event payloads are valid.
-- Isolated nodes are visible to the creator before publishing.
+- 存在起始节点。
+- 每个选择目标都存在。
+- 每个自动跳转目标都存在。
+- 结局节点完整。
+- 必要的视频 URL 或媒体资源存在。
+- 条件引用的变量存在。
+- 时间线事件 payload 合法。
+- 孤立节点在发布前对创作者可见。
 
-## 6. Infrastructure
+## 6. 基建
 
-Current source:
+当前来源：
 
-- `src/lib/story-engine.ts`: domain types.
-- `src/lib/game-store.ts`: project editing operations.
-- `src/lib/playthrough-store.ts`: runtime operations.
-- `src/lib/storage.ts`: storage adapter selection.
-- `src/lib/sqlite.ts`: local SQLite storage.
-- `src/lib/postgres.ts`: PostgreSQL storage.
-- `src/app/api/*`: API routes.
+- `src/lib/story-engine.ts`：领域类型。
+- `src/lib/game-store.ts`：项目编辑操作。
+- `src/lib/playthrough-store.ts`：运行时操作。
+- `src/lib/storage.ts`：存储适配选择。
+- `src/lib/sqlite.ts`：本地 SQLite 存储。
+- `src/lib/postgres.ts`：PostgreSQL 存储。
+- `src/app/api/*`：API 路由。
 
-Target direction:
+目标方向：
 
-- `lib/domain`: types, validation, graph checks, rule evaluation.
-- `lib/services`: project service, playthrough service, publish service.
-- `lib/storage`: SQLite and PostgreSQL adapters behind stable interfaces.
-- `lib/runtime`: runtime transition logic.
-- `lib/admin`: admin-only editing helpers.
+- `lib/domain`：类型、校验、图检查、规则计算。
+- `lib/services`：项目服务、游玩服务、发布服务。
+- `lib/storage`：SQLite/PostgreSQL 适配器。
+- `lib/runtime`：运行时状态流转。
+- `lib/admin`：后台编辑专用逻辑。
 
-API route direction:
+API 方向：
 
 - `/api/projects`
 - `/api/projects/[slug]`
@@ -153,54 +152,53 @@ API route direction:
 - `/api/playthroughs`
 - `/api/uploads`
 
-Keep current `/api/admin/*` routes until the frontend is migrated.
+当前先保留 `/api/admin/*`，直到前端迁移完成。
 
-## 7. Refactor Phases
+## 7. 重构阶段
 
-### Phase 1: Structure Without Behavior Changes
+### Phase 1：只整理结构，不改行为
 
-- Create clearer folders for admin, runtime, domain, and storage code.
-- Split large components without changing UI behavior.
-- Keep existing routes working.
-- Run `npm run build` after each meaningful step.
+- 建立更清晰的 admin、runtime、domain、storage 目录。
+- 拆分大组件，但保持 UI 行为不变。
+- 保持现有路由可用。
+- 每个有意义的步骤后运行 `npm run build`。
 
-### Phase 2: Data Model Cleanup
+### Phase 2：数据模型清理
 
-- Clarify Project/Game/Node/Choice/Playthrough responsibilities.
-- Add validation helpers.
-- Prepare fields for publish status and visibility.
-- Keep backward compatibility with existing stored projects.
+- 明确 Project/Game/Node/Choice/Playthrough 的职责。
+- 增加校验 helper。
+- 为发布状态和可见性预留字段。
+- 保持已有存储数据兼容。
 
-### Phase 3: Creator Studio Split
+### Phase 3：创作后台拆分
 
-- Split `AdminStoryEditor` into focused panels.
-- Move editor-only helper logic out of the component.
-- Add project health/publish checklist.
-- Improve project overview and project switching.
+- 把 `AdminCanvasEditor` 拆成画布层、对象属性面板、数据适配器和 API action。
+- 把编辑器 helper 从组件中移出。
+- 增加项目健康检查/发布清单。
+- 优化项目总览和项目切换。
 
-### Phase 4: Runtime Stabilization
+### Phase 4：播放页稳定化
 
-- Extract runtime state transitions from `InteractivePlayer`.
-- Standardize runtime API payloads.
-- Improve empty project, missing node, missing video, and ending states.
-- Keep preview mode explicit.
+- 从 `InteractivePlayer` 抽出运行时状态流转逻辑。
+- 标准化运行时 API payload。
+- 改善空项目、缺失节点、缺失视频和结局状态。
+- 明确预览模式。
 
-### Phase 5: Home Productization
+### Phase 5：首页产品化
 
-- Show only published/listed games.
-- Add better discovery structure: categories, tags, sorting, and empty states.
-- Keep the home page independent from editor-only data.
+- 首页只展示已发布/已上架项目。
+- 增加分类、标签、排序和空状态。
+- 保持首页不依赖编辑器内部数据。
 
-## 8. Immediate Next Step
+## 8. 立即下一步
 
-Start with Phase 1.
+从 Phase 1 开始。
 
-Do not change behavior first. Split code and clarify boundaries while preserving:
+先不改变行为，只拆结构和明确边界，同时保留：
 
 - `/`
 - `/projects/[slug]`
 - `/admin`
 - `/admin?project=[slug]`
-- existing API routes
-- current SQLite/PostgreSQL storage behavior
-
+- 现有 API 路由
+- 当前 SQLite/PostgreSQL 存储行为

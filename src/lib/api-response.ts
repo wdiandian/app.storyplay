@@ -15,6 +15,17 @@ export function serializePlaythrough(
       promoVideoUrl: game.promoVideoUrl,
       promoPosterUrl: game.promoPosterUrl,
       promoText: game.promoText,
+      records:
+        game.records?.map((record) => ({
+          id: record.id,
+          recordType: record.recordType,
+          title: record.title,
+          body: record.body,
+          lockedLabel: record.lockedLabel ?? "",
+          visibleWhenLocked: Boolean(record.visibleWhenLocked),
+          unlockNodeCodes: record.unlockNodeCodes ?? [],
+          unlockChoiceCodes: record.unlockChoiceCodes ?? [],
+        })) ?? [],
     },
     playthrough: {
       id: session.id,

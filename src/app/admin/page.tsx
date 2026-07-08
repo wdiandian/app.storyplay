@@ -1,5 +1,5 @@
 import { AdminProjectOverview } from "@/components/admin-project-overview";
-import { AdminStoryEditor } from "@/components/admin-story-editor";
+import { AdminCanvasEditor } from "@/components/admin-canvas-editor";
 import { getGame, listProjectSummaries } from "@/lib/game-store";
 
 export const dynamic = "force-dynamic";
@@ -18,5 +18,5 @@ export default async function AdminPage({
 
   const initialGame = await getGame(params.project);
 
-  return <AdminStoryEditor initialGame={initialGame} projects={projects} />;
+  return <AdminCanvasEditor initialGame={initialGame} projects={projects} />;
 }

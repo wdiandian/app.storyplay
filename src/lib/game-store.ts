@@ -7,6 +7,7 @@ import {
   type StoryChoice,
   type StoryGame,
   type StoryNode,
+  type StoryRecord,
   type TimelineEvent,
   type VariableAction,
   type VariableDefinition,
@@ -447,6 +448,19 @@ function sanitizeImportedChoice(choice: StoryChoice): StoryChoice {
   };
 }
 
+function sanitizeImportedRecord(record: StoryRecord): StoryRecord {
+  return {
+    id: record.id.trim(),
+    recordType: record.recordType,
+    title: record.title.trim(),
+    body: record.body.trim(),
+    lockedLabel: record.lockedLabel?.trim(),
+    visibleWhenLocked: Boolean(record.visibleWhenLocked),
+    unlockNodeCodes: record.unlockNodeCodes?.map((code) => code.trim()).filter(Boolean),
+    unlockChoiceCodes: record.unlockChoiceCodes?.map((code) => code.trim()).filter(Boolean),
+  };
+}
+
 function sanitizeImportedGame(input: StoryGame): StoryGame {
   const nodes = input.nodes.map((node) => {
     const normalizedChoices = (node.choices ?? []).map(sanitizeImportedChoice);
@@ -495,6 +509,8 @@ function sanitizeImportedGame(input: StoryGame): StoryGame {
       initialValue: variable.initialValue,
       options: variable.options?.map((option) => option.trim()).filter(Boolean),
     })),
+    records: (input.records ?? []).map(sanitizeImportedRecord),
+    authoringGraph: input.authoringGraph,
     nodes,
   };
 }

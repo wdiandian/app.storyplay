@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { startTransition, useEffect, useRef, useState } from "react";
 import { getAvailableChoices, matchesConditions } from "@/lib/story-rules";
@@ -62,6 +63,17 @@ type PlaythroughPayload = {
   triggeredEventIds: string[];
 };
 
+type RecordPayload = {
+  id: string;
+  recordType: "memory" | "clue" | "echo";
+  title: string;
+  body: string;
+  lockedLabel: string;
+  visibleWhenLocked: boolean;
+  unlockNodeCodes: string[];
+  unlockChoiceCodes: string[];
+};
+
 type SessionPayload = {
   game: {
     id: string;
@@ -72,6 +84,7 @@ type SessionPayload = {
     promoVideoUrl: string;
     promoPosterUrl: string;
     promoText: string;
+    records: RecordPayload[];
   };
   playthrough: PlaythroughPayload;
   node: NodePayload;
@@ -140,8 +153,6 @@ const toneAccent: Record<NonNullable<NodePayload["endingTone"]>, string> = {
 };
 
 const autoAdvanceDurationMs = 1200;
-const playbackRates = [1, 1.25, 1.5, 2];
-
 const scenePresentations: Record<SceneStage, ScenePresentation> = {
   opening: {
     stage: "opening",
@@ -508,16 +519,255 @@ function getEndingSummary(history: HistoryPayload[]) {
   return latest.map((entry) => entry.choiceLabel).join(" / ");
 }
 
+function getVisitedNodeCodes(history: HistoryPayload[], currentNode: NodePayload | null | undefined) {
+  const codes = new Set<string>();
+
+  for (const entry of history) {
+    codes.add(entry.nodeCode);
+    codes.add(entry.targetNodeCode);
+  }
+
+  if (currentNode) {
+    codes.add(currentNode.code);
+  }
+
+  return codes;
+}
+
+function getChosenChoiceCodes(history: HistoryPayload[]) {
+  return new Set(history.map((entry) => entry.choiceCode));
+}
+
+function isRecordUnlocked(
+  record: RecordPayload,
+  history: HistoryPayload[],
+  currentNode: NodePayload | null | undefined,
+) {
+  const visitedNodeCodes = getVisitedNodeCodes(history, currentNode);
+  const chosenChoiceCodes = getChosenChoiceCodes(history);
+  const hasUnlockRules = record.unlockNodeCodes.length > 0 || record.unlockChoiceCodes.length > 0;
+
+  if (!hasUnlockRules) {
+    return false;
+  }
+
+  return (
+    record.unlockNodeCodes.some((code) => visitedNodeCodes.has(code)) ||
+    record.unlockChoiceCodes.some((code) => chosenChoiceCodes.has(code))
+  );
+}
+
+function getExplicitRecordEntries({
+  records,
+  recordType,
+  history,
+  currentNode,
+}: {
+  records: RecordPayload[];
+  recordType: RecordPayload["recordType"];
+  history: HistoryPayload[];
+  currentNode: NodePayload | null | undefined;
+}) {
+  const metaByType: Record<RecordPayload["recordType"], { unlocked: string; locked: string }> = {
+    memory: { unlocked: "回忆已解锁", locked: "未解锁回忆" },
+    clue: { unlocked: "线索已解锁", locked: "未解锁线索" },
+    echo: { unlocked: "回响已解锁", locked: "未解锁回响" },
+  };
+
+  return records
+    .filter((record) => record.recordType === recordType)
+    .flatMap((record) => {
+      const unlocked = isRecordUnlocked(record, history, currentNode);
+
+      if (!unlocked && !record.visibleWhenLocked) {
+        return [];
+      }
+
+      return [
+        {
+          id: record.id,
+          title: record.title,
+          body: unlocked ? record.body : record.lockedLabel || "继续推进剧情后解锁。",
+          meta: unlocked ? metaByType[recordType].unlocked : metaByType[recordType].locked,
+          locked: !unlocked,
+        },
+      ];
+    });
+}
+
+function getMemoryEntries(history: HistoryPayload[], currentNode: NodePayload | null | undefined) {
+  const entries: Array<{
+    id: string;
+    label: string;
+    title: string;
+    detail: string;
+    nodeCode: string;
+    active: boolean;
+  }> = [];
+
+  if (!history.length && currentNode) {
+    return [
+      {
+        id: `current-${currentNode.code}`,
+        label: "当前片段",
+        title: currentNode.title || currentNode.code,
+        detail: currentNode.description || "故事刚刚开始，新的分支还没有被解开。",
+        nodeCode: currentNode.code,
+        active: true,
+      },
+    ];
+  }
+
+  history.forEach((entry, index) => {
+    if (index === 0) {
+      entries.push({
+        id: `node-${entry.nodeCode}`,
+        label: "起点",
+        title: entry.nodeCode,
+        detail: "你从这里进入了本轮故事。",
+        nodeCode: entry.nodeCode,
+        active: false,
+      });
+    }
+
+    entries.push({
+      id: `choice-${entry.nodeCode}-${entry.choiceCode}-${index}`,
+      label: `分支 ${index + 1}`,
+      title: entry.choiceLabel,
+      detail: `通向 ${entry.targetNodeCode}`,
+      nodeCode: entry.targetNodeCode,
+      active: false,
+    });
+  });
+
+  if (currentNode && entries.every((entry) => entry.nodeCode !== currentNode.code || !entry.active)) {
+    entries.push({
+      id: `current-${currentNode.code}`,
+      label: currentNode.isEnding ? "当前结局" : "当前位置",
+      title: currentNode.title || currentNode.code,
+      detail: currentNode.description || "你已经抵达这个片段。",
+      nodeCode: currentNode.code,
+      active: true,
+    });
+  }
+
+  return entries;
+}
+
+function getClueEntries({
+  session,
+  currentNode,
+  activeTextCard,
+  runtimeOverlay,
+  variablePreview,
+}: {
+  session: SessionPayload | null;
+  currentNode: NodePayload | null | undefined;
+  activeTextCard: RuntimeTextCard | null;
+  runtimeOverlay: RuntimeOverlayState | null;
+  variablePreview: Array<{ key: string; value: string }>;
+}) {
+  const entries: Array<{ id: string; title: string; body: string; meta: string }> = [];
+
+  if (session?.game.promoText || session?.game.tagline) {
+    entries.push({
+      id: "opening",
+      title: "开场线索",
+      body: session.game.promoText || session.game.tagline,
+      meta: "进入作品后解锁",
+    });
+  }
+
+  if (currentNode?.description) {
+    entries.push({
+      id: `node-${currentNode.code}`,
+      title: currentNode.title || "当前片段",
+      body: currentNode.description,
+      meta: "当前片段",
+    });
+  }
+
+  if (activeTextCard?.body) {
+    entries.push({
+      id: `text-${activeTextCard.title}`,
+      title: activeTextCard.title,
+      body: activeTextCard.body,
+      meta: "剧情提示",
+    });
+  }
+
+  if (runtimeOverlay?.body) {
+    entries.push({
+      id: `overlay-${runtimeOverlay.title}`,
+      title: runtimeOverlay.title,
+      body: runtimeOverlay.body,
+      meta: "画面提示",
+    });
+  }
+
+  variablePreview.forEach((entry, index) => {
+    entries.push({
+      id: `state-${entry.key}`,
+      title: `隐藏状态 ${index + 1}`,
+      body: `${entry.key} 变为 ${entry.value}`,
+      meta: "状态线索",
+    });
+  });
+
+  return entries;
+}
+
+function getEchoEntries({
+  history,
+  runtimeActions,
+  lastChoiceLabel,
+}: {
+  history: HistoryPayload[];
+  runtimeActions: RuntimeActionEntry[];
+  lastChoiceLabel: string | null;
+}) {
+  const entries: Array<{ id: string; title: string; body: string; meta: string }> = [];
+
+  if (lastChoiceLabel) {
+    entries.push({
+      id: "last-choice",
+      title: "刚刚做出的选择",
+      body: lastChoiceLabel,
+      meta: "当前回响",
+    });
+  }
+
+  runtimeActions.forEach((action) => {
+    entries.push({
+      id: action.id,
+      title: action.label,
+      body: action.detail,
+      meta: "剧情回响",
+    });
+  });
+
+  history.slice(-4).reverse().forEach((entry, index) => {
+    entries.push({
+      id: `history-${entry.nodeCode}-${entry.choiceCode}-${index}`,
+      title: entry.choiceLabel,
+      body: `这次选择把故事推向 ${entry.targetNodeCode}。`,
+      meta: "选择后果",
+    });
+  });
+
+  return entries;
+}
+
 function getInfoPanelTitle(tab: "history" | "state" | "actions") {
   if (tab === "history") {
-    return "选择记录";
+    return "回忆";
   }
 
   if (tab === "state") {
-    return "作品信息";
+    return "线索";
   }
 
-  return "提示记录";
+  return "回响";
 }
 
 export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
@@ -543,9 +793,10 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
   const [runtimeActions, setRuntimeActions] = useState<RuntimeActionEntry[]>([]);
   const [triggeredEventIds, setTriggeredEventIds] = useState<string[]>([]);
   const [pendingChoiceCode, setPendingChoiceCode] = useState<string | null>(null);
-  const [playbackRate, setPlaybackRate] = useState(1);
+  const [isVideoPaused, setIsVideoPaused] = useState(false);
+  const [isMuted, setIsMuted] = useState(true);
+  const [lastChoiceLabel, setLastChoiceLabel] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const promoVideoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const previousNodeCodeRef = useRef<string | null>(null);
   const transitionTimerRef = useRef<number | null>(null);
@@ -569,6 +820,7 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
       setRuntimeActions([]);
       setTriggeredEventIds([]);
       setPendingChoiceCode(null);
+      setIsVideoPaused(false);
       runtimeChoiceHandledRef.current = false;
     });
   }
@@ -610,24 +862,6 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
     }
   }
 
-  function applyPlaybackRate(nextRate: number) {
-    setPlaybackRate(nextRate);
-
-    if (videoRef.current) {
-      videoRef.current.playbackRate = nextRate;
-    }
-
-    if (promoVideoRef.current) {
-      promoVideoRef.current.playbackRate = nextRate;
-    }
-  }
-
-  function cyclePlaybackRate() {
-    const currentIndex = playbackRates.indexOf(playbackRate);
-    const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % playbackRates.length : 0;
-    applyPlaybackRate(playbackRates[nextIndex]);
-  }
-
   function handleVideoEnded() {
     const video = videoRef.current;
 
@@ -637,6 +871,43 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
     }
 
     setHasEnded(true);
+    setIsVideoPaused(true);
+  }
+
+  function startStory() {
+    setShowPromo(false);
+    setIsVideoPaused(false);
+
+    window.setTimeout(() => {
+      void videoRef.current?.play().catch(() => {
+        setIsVideoPaused(true);
+      });
+    }, 40);
+  }
+
+  function toggleVideoPlayback() {
+    const video = videoRef.current;
+
+    if (!video) {
+      return;
+    }
+
+    if (video.paused) {
+      void video.play().then(() => setIsVideoPaused(false)).catch(() => setIsVideoPaused(true));
+      return;
+    }
+
+    video.pause();
+    setIsVideoPaused(true);
+  }
+
+  function toggleMute() {
+    const nextMuted = !isMuted;
+    setIsMuted(nextMuted);
+
+    if (videoRef.current) {
+      videoRef.current.muted = nextMuted;
+    }
   }
 
   useEffect(() => {
@@ -742,23 +1013,16 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
     }, 260);
   }, [hasEnded, session]);
 
-  useEffect(() => {
-    if (videoRef.current) {
-      videoRef.current.playbackRate = playbackRate;
-    }
-
-    if (promoVideoRef.current) {
-      promoVideoRef.current.playbackRate = playbackRate;
-    }
-  }, [playbackRate, session, showPromo]);
-
   async function handleDefaultChoice(choiceCode: string) {
     if (!session) {
       return;
     }
 
+    const selectedChoice = session.node.choices.find((choice) => choice.code === choiceCode);
+
     setIsSubmitting(true);
     setPendingChoiceCode(choiceCode);
+    setLastChoiceLabel(selectedChoice?.label ?? null);
 
     try {
       const nextSession = await requestSession(
@@ -785,6 +1049,7 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
 
     setIsSubmitting(true);
     setPendingChoiceCode(choice.code);
+    setLastChoiceLabel(choice.label);
 
     try {
       const nextSession = await requestSession(
@@ -923,6 +1188,7 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
           if (videoRef.current) {
             captureVideoFreezeFrame(videoRef.current);
             videoRef.current.pause();
+            setIsVideoPaused(true);
           }
         }
 
@@ -943,6 +1209,7 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
             if (pauseVideo && videoRef.current) {
               captureVideoFreezeFrame(videoRef.current);
               videoRef.current.pause();
+              setIsVideoPaused(true);
             }
 
             runtimeChoiceHandledRef.current = true;
@@ -1041,6 +1308,7 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
             },
           );
 
+          setLastChoiceLabel(null);
           applySession(nextSession);
         } catch (advanceError) {
           setError(advanceError instanceof Error ? advanceError.message : "自动流转失败");
@@ -1081,6 +1349,7 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
         },
       );
 
+      setLastChoiceLabel(null);
       applySession(nextSession);
       setShowPromo(!isPreviewMode);
       setShowInfoPanel(false);
@@ -1126,6 +1395,44 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
         : "items-center";
   const variablePreview = session ? getVariablePreview(session.playthrough.variables) : [];
   const endingSummary = getEndingSummary(session?.playthrough.history ?? []);
+  const historyEntries = session?.playthrough.history ?? [];
+  const explicitMemoryEntries = getExplicitRecordEntries({
+    records: session?.game.records ?? [],
+    recordType: "memory",
+    history: historyEntries,
+    currentNode,
+  });
+  const explicitClueEntries = getExplicitRecordEntries({
+    records: session?.game.records ?? [],
+    recordType: "clue",
+    history: historyEntries,
+    currentNode,
+  });
+  const explicitEchoEntries = getExplicitRecordEntries({
+    records: session?.game.records ?? [],
+    recordType: "echo",
+    history: historyEntries,
+    currentNode,
+  });
+  const memoryEntries = getMemoryEntries(historyEntries, currentNode);
+  const clueEntries = [
+    ...explicitClueEntries,
+    ...getClueEntries({
+      session,
+      currentNode,
+      activeTextCard,
+      runtimeOverlay,
+      variablePreview,
+    }),
+  ];
+  const echoEntries = [
+    ...explicitEchoEntries,
+    ...getEchoEntries({
+      history: historyEntries,
+      runtimeActions,
+      lastChoiceLabel,
+    }),
+  ];
 
   if (emptyProject) {
     return (
@@ -1152,123 +1459,6 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
     );
   }
 
-  if (showPromo && session && !isPreviewMode) {
-    return (
-      <main className="min-h-screen bg-[#050608] text-stone-100">
-        <div className="relative isolate min-h-screen overflow-hidden">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(164,31,53,0.36),_transparent_25%),radial-gradient(circle_at_82%_16%,_rgba(245,158,11,0.18),_transparent_20%),linear-gradient(180deg,_#191317_0%,_#090a0c_48%,_#040506_100%)]" />
-          <div className="absolute inset-0 opacity-[0.08] [background-image:linear-gradient(rgba(255,255,255,0.18)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.12)_1px,transparent_1px)] [background-size:32px_32px]" />
-
-          <div className="relative mx-auto flex min-h-screen w-full max-w-[1720px] flex-col justify-center px-4 py-4 sm:px-6 lg:px-8">
-            <section className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.7fr)_420px]">
-              <section className="relative flex flex-col overflow-hidden rounded-[2.8rem] border border-white/10 bg-black/40 shadow-[0_50px_180px_rgba(0,0,0,0.55)]">
-                <div className="absolute inset-0 bg-[radial-gradient(circle_at_75%_12%,_rgba(255,255,255,0.08),_transparent_26%),linear-gradient(180deg,_rgba(0,0,0,0.08)_0%,_rgba(0,0,0,0.7)_100%)]" />
-                <div className="relative aspect-[16/9] bg-black">
-                  <video
-                    ref={promoVideoRef}
-                    className="h-full w-full object-cover"
-                    src={session.game.promoVideoUrl || currentNode?.videoUrl}
-                    poster={session.game.promoPosterUrl || undefined}
-                    controls
-                    muted
-                    playsInline
-                    preload="metadata"
-                    autoPlay
-                    loop
-                    onLoadedMetadata={(event) => {
-                      event.currentTarget.playbackRate = playbackRate;
-                    }}
-                  />
-                  <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,_rgba(0,0,0,0.12)_0%,_rgba(0,0,0,0.02)_42%,_rgba(0,0,0,0.56)_100%)]" />
-                  <div className="pointer-events-none absolute left-4 top-4 sm:left-6 sm:top-6">
-                    <div className="rounded-full border border-white/12 bg-black/38 px-3 py-1.5 text-[11px] uppercase tracking-[0.38em] text-amber-200/80 backdrop-blur-xl">
-                      预告片
-                    </div>
-                  </div>
-                </div>
-                <div className="relative flex-1 px-6 pb-7 pt-5 sm:px-8 sm:pb-8 sm:pt-6">
-                  <div className="text-[11px] uppercase tracking-[0.46em] text-amber-200/72">
-                    作品标题
-                  </div>
-                  <h1 className="mt-4 max-w-4xl break-words text-3xl leading-tight text-stone-50 sm:text-4xl lg:text-5xl">
-                    {session.game.title}
-                  </h1>
-                  <p className="mt-4 max-w-3xl text-sm leading-8 text-stone-300 sm:text-base">
-                    {session.game.tagline}
-                  </p>
-                </div>
-              </section>
-
-              <aside className="flex flex-col gap-4">
-                <section className="rounded-[2.4rem] border border-white/10 bg-black/28 p-6 backdrop-blur-xl">
-                  <div className="text-[11px] uppercase tracking-[0.48em] text-amber-200/75">
-                    预告说明
-                  </div>
-                  <h2 className="mt-4 break-words text-3xl leading-tight text-stone-50">
-                    开始前先看一眼
-                  </h2>
-                  <p className="mt-4 text-sm leading-8 text-stone-300">
-                    {session.game.promoText || session.game.tagline}
-                  </p>
-                </section>
-
-                <section className="rounded-[2.4rem] border border-white/10 bg-black/28 p-6 backdrop-blur-xl">
-                  <div className="text-[11px] uppercase tracking-[0.45em] text-stone-500">
-                    即将进入
-                  </div>
-                  <div className="mt-4 rounded-[1.7rem] border border-white/8 bg-white/[0.03] p-5">
-                    <div className="text-xs uppercase tracking-[0.35em] text-stone-500">
-                      {sceneLabel}
-                    </div>
-                    <div className="mt-3 break-words text-2xl leading-tight text-stone-50">
-                      {currentNode?.title}
-                    </div>
-                    <p className="mt-3 text-sm leading-7 text-stone-300">
-                      {currentNode?.description}
-                    </p>
-                  </div>
-
-                  <div className="mt-5 grid gap-3">
-                    <button
-                      type="button"
-                      className="rounded-full border border-amber-300/30 bg-amber-200/10 px-5 py-3 text-sm text-amber-50 transition hover:border-amber-200/60 hover:bg-amber-200/18"
-                      onClick={() => setShowPromo(false)}
-                    >
-                      开始进入正片
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded-full border border-white/12 bg-white/4 px-5 py-3 text-sm text-stone-200 transition hover:border-white/30 hover:bg-white/8"
-                      onClick={() => {
-                        const video = promoVideoRef.current;
-                        if (video) {
-                          if (video.paused) {
-                            void video.play().catch(() => undefined);
-                          } else {
-                            video.pause();
-                          }
-                        }
-                      }}
-                    >
-                      播放 / 暂停视频
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded-full border border-white/12 bg-white/4 px-5 py-3 text-sm text-stone-200 transition hover:border-white/30 hover:bg-white/8"
-                      onClick={cyclePlaybackRate}
-                    >
-                      倍速 {playbackRate}x
-                    </button>
-                  </div>
-                </section>
-              </aside>
-            </section>
-          </div>
-        </div>
-      </main>
-    );
-  }
-
   return (
     <main className={scenePresentation.mainBackground}>
       <div className="relative isolate min-h-screen overflow-hidden">
@@ -1285,14 +1475,15 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
                     ref={videoRef}
                     className={`h-full w-full object-cover ${freezeFrameVisible ? "invisible" : ""}`}
                     src={currentNode.videoUrl}
-                    controls
-                    muted
+                    muted={isMuted}
                     playsInline
                     preload="metadata"
-                    autoPlay
+                    autoPlay={!showPromo}
                     onLoadedMetadata={(event) => {
-                      event.currentTarget.playbackRate = playbackRate;
+                      event.currentTarget.muted = isMuted;
                     }}
+                    onPlay={() => setIsVideoPaused(false)}
+                    onPause={() => setIsVideoPaused(true)}
                     onEnded={handleVideoEnded}
                     onError={() => setVideoFailed(true)}
                   />
@@ -1314,10 +1505,57 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
               <div className={scenePresentation.videoOverlayClassName} />
               <div className={scenePresentation.vignetteClassName} />
               {choiceReady ? (
-                <div className="pointer-events-none absolute inset-0 z-[15] bg-[radial-gradient(circle_at_center,_rgba(255,255,255,0.04)_0%,_rgba(0,0,0,0.2)_28%,_rgba(0,0,0,0.72)_100%)]" />
+                <div className="pointer-events-none absolute inset-0 z-[15] bg-[radial-gradient(circle_at_center,_rgba(255,255,255,0.05)_0%,_rgba(0,0,0,0.34)_28%,_rgba(0,0,0,0.86)_100%)]" />
               ) : null}
 
-              <div className="absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-4 px-4 pt-4 sm:px-6 sm:pt-6">
+              {showPromo && session && !isPreviewMode ? (
+                <div className="absolute inset-0 z-40 flex items-end bg-[linear-gradient(90deg,rgba(0,0,0,0.86)_0%,rgba(0,0,0,0.56)_48%,rgba(0,0,0,0.28)_100%)] px-5 pb-10 pt-24 sm:px-8 lg:px-12 lg:pb-14">
+                  <div className="max-w-4xl">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span className="rounded-md bg-[#e0442e] px-3 py-1.5 text-xs font-medium text-white">
+                        StoryPlay
+                      </span>
+                      <span className="text-xs uppercase tracking-[0.28em] text-stone-300/80">
+                        互动影游
+                      </span>
+                    </div>
+                    <h1 className="mt-6 max-w-4xl break-words text-4xl font-semibold leading-tight text-stone-50 sm:text-5xl lg:text-6xl">
+                      {session.game.title}
+                    </h1>
+                    <p className="mt-5 max-w-2xl text-base leading-8 text-stone-200 sm:text-lg">
+                      {session.game.promoText || session.game.tagline}
+                    </p>
+                    {currentNode ? (
+                      <div className="mt-6 max-w-2xl border-l border-white/22 pl-4">
+                        <div className="text-xs uppercase tracking-[0.32em] text-amber-200/78">
+                          即将进入
+                        </div>
+                        <div className="mt-2 text-xl text-stone-50">{currentNode.title}</div>
+                        <p className="mt-2 line-clamp-2 text-sm leading-7 text-stone-300">
+                          {currentNode.description || session.game.tagline}
+                        </p>
+                      </div>
+                    ) : null}
+                    <div className="mt-8 flex flex-wrap items-center gap-3">
+                      <button
+                        type="button"
+                        className="rounded-md bg-white px-5 py-3 text-sm font-medium text-stone-950 transition hover:bg-[#fff0eb]"
+                        onClick={startStory}
+                      >
+                        进入故事
+                      </button>
+                      <Link
+                        href="/"
+                        className="rounded-md border border-white/18 bg-white/8 px-5 py-3 text-sm text-white backdrop-blur transition hover:border-white/36 hover:bg-white/14"
+                      >
+                        返回大厅
+                      </Link>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className={`absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-4 px-4 pt-4 transition duration-300 sm:px-6 sm:pt-6 ${showPromo && !isPreviewMode ? "opacity-0" : "opacity-100"}`}>
                 <div className="flex flex-wrap items-center gap-2">
                   <span className={scenePresentation.badgeClassName}>
                     {isPreviewMode ? "片段试玩" : sceneLabel}
@@ -1335,40 +1573,35 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
                 <div className="flex max-w-[70vw] flex-wrap items-center justify-end gap-2 pl-6 sm:max-w-none">
                   <button
                     type="button"
-                    className="rounded-full border border-white/12 bg-black/40 px-3 py-2 text-xs text-stone-200 transition hover:border-white/35 hover:bg-white/8 sm:px-4 sm:text-sm"
-                    onClick={() => setShowInfoPanel((current) => !current)}
+                    className="rounded-md border border-white/12 bg-black/40 px-3 py-2 text-xs text-stone-200 transition hover:border-white/35 hover:bg-white/8 sm:px-4 sm:text-sm"
+                    onClick={toggleVideoPlayback}
+                    disabled={!currentNode || isSubmitting || choiceReady}
                   >
-                    {showInfoPanel ? "收起面板" : "展开面板"}
+                    {isVideoPaused ? "播放" : "暂停"}
                   </button>
                   <button
                     type="button"
-                    className="rounded-full border border-white/12 bg-black/40 px-3 py-2 text-xs text-stone-100 transition hover:border-white/35 hover:bg-white/8 disabled:opacity-50 sm:px-4 sm:text-sm"
+                    className="rounded-md border border-white/12 bg-black/40 px-3 py-2 text-xs text-stone-200 transition hover:border-white/35 hover:bg-white/8 sm:px-4 sm:text-sm"
+                    onClick={toggleMute}
+                    disabled={!currentNode}
+                  >
+                    {isMuted ? "开声" : "静音"}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md border border-white/12 bg-black/40 px-3 py-2 text-xs text-stone-200 transition hover:border-white/35 hover:bg-white/8 sm:px-4 sm:text-sm"
+                    onClick={() => setShowInfoPanel((current) => !current)}
+                  >
+                    {showInfoPanel ? "收起" : "回忆"}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md border border-white/12 bg-black/40 px-3 py-2 text-xs text-stone-100 transition hover:border-white/35 hover:bg-white/8 disabled:opacity-50 sm:px-4 sm:text-sm"
                     onClick={handleRestart}
                     disabled={!session || isSubmitting}
                   >
                     重开
                   </button>
-                  <button
-                    type="button"
-                    className="rounded-full border border-white/12 bg-black/40 px-3 py-2 text-xs text-stone-100 transition hover:border-white/35 hover:bg-white/8 sm:px-4 sm:text-sm"
-                    onClick={cyclePlaybackRate}
-                  >
-                    倍速 {playbackRate}x
-                  </button>
-                </div>
-              </div>
-
-              <div className="pointer-events-none absolute left-4 top-20 z-20 max-w-[65vw] sm:left-6 sm:top-24 sm:max-w-none">
-                <div className={scenePresentation.titlePanelClassName}>
-                  <div className="text-[11px] uppercase tracking-[0.38em] text-stone-400">
-                    {scenePresentation.title}
-                  </div>
-                  <div className="mt-2 break-words text-lg leading-tight text-stone-50 sm:text-xl">
-                    {currentNode?.title ?? "加载中"}
-                  </div>
-                  <div className="mt-2 max-w-sm text-xs leading-5 text-stone-400">
-                    {scenePresentation.helper}
-                  </div>
                 </div>
               </div>
 
@@ -1383,6 +1616,11 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
                     <div className={scenePresentation.transitionTextClassName}>
                       {transitionText}
                     </div>
+                    {lastChoiceLabel ? (
+                      <div className="mx-auto mt-5 max-w-xl rounded-md border border-white/12 bg-black/34 px-4 py-3 text-sm leading-7 text-stone-200 backdrop-blur">
+                        你的选择：{lastChoiceLabel}
+                      </div>
+                    ) : null}
                     <div className={`mx-auto mt-5 h-px w-28 ${scenePresentation.transitionLineClassName}`} />
                   </div>
                 </div>
@@ -1449,21 +1687,25 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
               ) : null}
 
               {choiceReady && currentNode ? (
-                <div className="absolute inset-x-0 bottom-0 z-20 px-3 pb-3 sm:px-6 sm:pb-6">
-                  <div className="mx-auto max-w-6xl">
-                    <div className={scenePresentation.choiceShellClassName}>
+                <div className="absolute inset-0 z-20 flex items-end px-3 pb-4 pt-24 sm:px-6 sm:pb-6">
+                  <div className="mx-auto grid w-full max-w-6xl gap-5 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] lg:items-end">
+                    <div className="story-choice-enter rounded-lg border border-white/12 bg-black/64 p-5 shadow-[0_24px_90px_rgba(0,0,0,0.42)] backdrop-blur-xl sm:p-6">
                       <div className={scenePresentation.choiceEyebrowClassName}>
-                        {scenePresentation.choicePrompt}
+                        剧情暂停
                       </div>
-                      <div className="mt-2 break-words text-xl text-stone-50 sm:text-2xl">
+                      <div className="mt-3 break-words text-2xl font-semibold leading-tight text-stone-50 sm:text-3xl">
                         {runtimeChoices?.title || currentNode.title || "做出你的下一步选择"}
                       </div>
-                      <p className="mt-2 text-sm leading-7 text-stone-300">
+                      <p className="mt-3 text-sm leading-7 text-stone-300">
                         {runtimeChoices?.body || scenePresentation.choiceHelper}
+                      </p>
+                      <div className="mt-5 h-px w-20 bg-white/20" />
+                      <p className="mt-4 text-xs uppercase tracking-[0.32em] text-stone-400">
+                        选择会立刻改变后续片段
                       </p>
                     </div>
 
-                    <div className="grid gap-3 lg:grid-cols-2">
+                    <div className="grid gap-3">
                       {choiceBlock.map((choice, index) => {
                         const mood = getChoicePresentation(choice);
                         const selected = pendingChoiceCode === choice.code;
@@ -1472,7 +1714,7 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
                           <button
                             key={choice.code}
                             type="button"
-                            className={`group story-choice-enter rounded-[1.6rem] border px-4 py-4 text-left transition duration-200 disabled:opacity-50 sm:rounded-[2rem] sm:px-5 sm:py-5 ${mood.card} ${mood.glow} ${selected ? "scale-[0.985] border-amber-200/55 bg-amber-200/[0.12]" : ""}`}
+                            className={`group story-choice-enter rounded-lg border px-4 py-4 text-left transition duration-200 hover:-translate-y-0.5 disabled:opacity-50 sm:px-5 sm:py-5 ${mood.card} ${mood.glow} ${selected ? "scale-[0.985] border-amber-200/55 bg-amber-200/[0.12]" : ""}`}
                             style={{ animationDelay: `${index * 110}ms`, animationFillMode: "both" }}
                             onClick={() =>
                               runtimeChoices
@@ -1493,8 +1735,8 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
                                   {choice.label}
                                 </div>
                               </div>
-                              <span className="rounded-full border border-white/10 px-3 py-1 text-[11px] uppercase tracking-[0.3em] text-stone-300">
-                                选项 {index + 1}
+                              <span className="rounded-md border border-white/10 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-stone-300">
+                                {index + 1}
                               </span>
                             </div>
 
@@ -1591,17 +1833,12 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
 
               {!choiceReady && !(hasEnded && currentNode?.isEnding) ? (
                 <div className="absolute inset-x-0 bottom-0 z-10 px-4 pb-20 sm:px-6 sm:pb-24">
-                  <div className="max-w-3xl">
-                    <div className={scenePresentation.titlePanelClassName}>
-                      <div className="text-[11px] uppercase tracking-[0.35em] text-stone-500">
+                  <div className="max-w-xl">
+                    <div className="inline-flex max-w-full items-center gap-3 rounded-md border border-white/10 bg-black/36 px-4 py-3 text-sm text-stone-200 backdrop-blur-xl">
+                      <span className="shrink-0 text-[11px] uppercase tracking-[0.28em] text-stone-400">
                         {scenePresentation.label}
-                      </div>
-                      <div className="mt-2 break-words text-lg leading-tight text-stone-100">
-                        {currentNode?.title ?? "加载中"}
-                      </div>
-                      <div className="mt-1 line-clamp-2 text-sm text-stone-400">
-                        {currentNode?.description || session?.game.tagline}
-                      </div>
+                      </span>
+                      <span className="truncate text-stone-50">{currentNode?.title ?? "加载中"}</span>
                     </div>
                   </div>
                 </div>
@@ -1622,6 +1859,7 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
                       }
 
                       setHasEnded(true);
+                      setIsVideoPaused(true);
                     }}
                     disabled={!currentNode || isSubmitting}
                   >
@@ -1638,14 +1876,14 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
                     className="absolute inset-0 bg-black/32"
                     onClick={() => setShowInfoPanel(false)}
                   />
-                  <aside className="relative z-10 h-full w-[min(92vw,380px)] border-l border-white/10 bg-black/78 p-4 backdrop-blur-2xl">
+                  <aside className="relative z-10 h-full w-[min(94vw,520px)] border-l border-white/10 bg-black/82 p-4 backdrop-blur-2xl">
                     <div className="flex h-full min-h-0 flex-col">
                       <div className="flex items-center justify-between gap-3">
                         <div>
                           <div className="text-[11px] uppercase tracking-[0.35em] text-stone-500">
-                            内容面板
+                            剧情记录
                           </div>
-                          <div className="mt-1 text-lg text-stone-100">{getInfoPanelTitle(infoTab)}</div>
+                          <div className="mt-1 text-xl text-stone-100">{getInfoPanelTitle(infoTab)}</div>
                         </div>
                         <button
                           type="button"
@@ -1675,73 +1913,93 @@ export function InteractivePlayer({ projectSlug }: { projectSlug?: string }) {
 
                       <div className="mt-4 flex-1 overflow-y-auto pr-1">
                         {infoTab === "history" ? (
-                          <div className="grid gap-3">
-                            {(session?.playthrough.history.length ?? 0) > 0 ? (
-                              session?.playthrough.history.map((entry, index) => (
-                                <div
-                                  key={`${entry.nodeCode}-${entry.choiceCode}-${index}`}
-                                  className="rounded-[1.5rem] border border-white/8 bg-white/[0.03] p-4"
-                                >
-                                  <div className="text-[11px] uppercase tracking-[0.3em] text-stone-500">
-                                    第 {index + 1} 次选择
-                                  </div>
-                                  <div className="mt-2 text-sm text-stone-100">{entry.choiceLabel}</div>
-                                  <div className="mt-2 text-sm leading-6 text-stone-400">剧情会根据这次选择继续展开。</div>
-                                </div>
-                              ))
-                            ) : (
-                              <div className="rounded-[1.5rem] border border-dashed border-white/12 px-4 py-6 text-sm leading-7 text-stone-400">
-                                这里会记录你已经做出的选择。当前还没有出现分支。
-                              </div>
-                            )}
-                          </div>
-                        ) : null}
-
-                        {infoTab === "state" ? (
                           <div className="grid gap-4">
-                            <div className="rounded-[1.5rem] border border-white/8 bg-white/[0.03] p-4">
-                              <div className="text-xs uppercase tracking-[0.32em] text-stone-500">作品说明</div>
-                              <p className="mt-3 text-sm leading-7 text-stone-300">
-                                {session?.game.promoText || session?.game.tagline || "这里会显示作品背景、开场提示或玩法说明。"}
-                              </p>
-                            </div>
-
-                            <div className="rounded-[1.5rem] border border-white/8 bg-white/[0.03] p-4">
-                              <div className="text-xs uppercase tracking-[0.32em] text-stone-500">关键记录</div>
-                              <div className="mt-3 grid gap-2">
-                                {variablePreview.length ? (
-                                  variablePreview.map((entry) => (
-                                    <div
-                                      key={entry.key}
-                                      className="flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-black/20 px-4 py-3 text-sm"
-                                    >
-                                      <span className="text-stone-400">{entry.key}</span>
-                                      <span className="font-medium text-stone-100">{entry.value}</span>
-                                    </div>
-                                  ))
+                            {explicitMemoryEntries.length ? (
+                              <div className="grid gap-3">
+                                {explicitMemoryEntries.map((entry) => (
+                                  <div
+                                    key={entry.id}
+                                    className={`rounded-lg border px-4 py-4 ${
+                                      entry.locked
+                                        ? "border-white/8 bg-white/[0.02] opacity-75"
+                                        : "border-[#e0442e]/35 bg-[#e0442e]/10"
+                                    }`}
+                                  >
+                                    <div className="text-[11px] uppercase tracking-[0.28em] text-stone-500">{entry.meta}</div>
+                                    <div className="mt-2 text-sm text-stone-100">{entry.title}</div>
+                                    <div className="mt-2 text-sm leading-7 text-stone-400">{entry.body}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
+                            <div className="rounded-lg border border-white/8 bg-white/[0.03] p-4">
+                              <div className="text-xs uppercase tracking-[0.32em] text-stone-500">已解锁路线</div>
+                              <div className="mt-4">
+                                {memoryEntries.length ? (
+                                  <div className="relative grid gap-0">
+                                    {memoryEntries.map((entry, index) => (
+                                      <div key={entry.id} className="relative grid grid-cols-[28px_minmax(0,1fr)] gap-3 pb-4 last:pb-0">
+                                        {index < memoryEntries.length - 1 ? (
+                                          <div className="absolute left-[9px] top-5 h-full w-px bg-white/12" />
+                                        ) : null}
+                                        <div className={`relative z-10 mt-1 h-5 w-5 rounded-full border ${entry.active ? "border-[#e0442e] bg-[#e0442e] shadow-[0_0_24px_rgba(224,68,46,0.35)]" : "border-white/18 bg-white/8"}`} />
+                                        <div className={`rounded-lg border px-4 py-3 ${entry.active ? "border-[#e0442e]/45 bg-[#e0442e]/10" : "border-white/8 bg-black/18"}`}>
+                                          <div className="flex flex-wrap items-center justify-between gap-2">
+                                            <span className="text-[11px] uppercase tracking-[0.28em] text-stone-500">
+                                              {entry.label}
+                                            </span>
+                                            <span className="text-xs text-stone-500">{entry.nodeCode}</span>
+                                          </div>
+                                          <div className="mt-2 text-sm text-stone-100">{entry.title}</div>
+                                          <div className="mt-2 text-sm leading-6 text-stone-400">{entry.detail}</div>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
                                 ) : (
-                                  <div className="text-sm text-stone-400">当前还没有新的关键记录。</div>
+                                  <div className="rounded-lg border border-dashed border-white/12 px-4 py-6 text-sm leading-7 text-stone-400">
+                                    进入故事后，路线会在这里逐步点亮。
+                                  </div>
                                 )}
                               </div>
                             </div>
                           </div>
                         ) : null}
 
-                        {infoTab === "actions" ? (
+                        {infoTab === "state" ? (
                           <div className="grid gap-3">
-                            {runtimeActions.length ? (
-                              runtimeActions.map((action) => (
-                                <div
-                                  key={action.id}
-                                  className="rounded-[1.4rem] border border-white/8 bg-white/[0.03] px-4 py-4"
-                                >
-                                  <div className="text-sm text-stone-100">{action.label}</div>
-                                  <div className="mt-2 text-sm leading-7 text-stone-400">{action.detail}</div>
+                            {clueEntries.length ? (
+                              clueEntries.map((entry) => (
+                                <div key={entry.id} className="rounded-lg border border-white/8 bg-white/[0.03] px-4 py-4">
+                                  <div className="text-[11px] uppercase tracking-[0.28em] text-stone-500">{entry.meta}</div>
+                                  <div className="mt-2 text-sm text-stone-100">{entry.title}</div>
+                                  <div className="mt-2 text-sm leading-7 text-stone-400">{entry.body}</div>
                                 </div>
                               ))
                             ) : (
-                              <div className="rounded-[1.5rem] border border-dashed border-white/12 px-4 py-6 text-sm leading-7 text-stone-400">
-                                当前还没有新的剧情提示。
+                              <div className="rounded-lg border border-dashed border-white/12 px-4 py-6 text-sm leading-7 text-stone-400">
+                                线索会随着剧情推进逐步解开。
+                              </div>
+                            )}
+                          </div>
+                        ) : null}
+
+                        {infoTab === "actions" ? (
+                          <div className="grid gap-3">
+                            {echoEntries.length ? (
+                              echoEntries.map((entry) => (
+                                <div
+                                  key={entry.id}
+                                  className="rounded-lg border border-white/8 bg-white/[0.03] px-4 py-4"
+                                >
+                                  <div className="text-[11px] uppercase tracking-[0.28em] text-stone-500">{entry.meta}</div>
+                                  <div className="mt-2 text-sm text-stone-100">{entry.title}</div>
+                                  <div className="mt-2 text-sm leading-7 text-stone-400">{entry.body}</div>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="rounded-lg border border-dashed border-white/12 px-4 py-6 text-sm leading-7 text-stone-400">
+                                选择造成的影响会在这里留下回响。
                               </div>
                             )}
                           </div>
